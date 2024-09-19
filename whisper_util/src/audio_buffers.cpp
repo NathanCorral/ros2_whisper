@@ -1,52 +1,12 @@
 #include "whisper_util/audio_buffers.hpp"
 
 namespace whisper {
-template <typename value_type>
-RingBuffer<value_type>::RingBuffer(const std::size_t &capacity)
-    : capacity_(capacity), buffer_(capacity) {
-  clear();
-};
 
-template <typename value_type> void RingBuffer<value_type>::enqueue(const_reference data) {
-  increment_head_();
-  if (is_full()) {
-    increment_tail_();
-  }
-  buffer_[head_] = data;
-}
 
-template <typename value_type> value_type RingBuffer<value_type>::dequeue() {
-  increment_tail_();
-  return buffer_[tail_];
-}
-
-template <typename value_type> void RingBuffer<value_type>::clear() {
-  head_ = 0;
-  tail_ = 0;
-  size_ = 0;
-}
-
-template <typename value_type> void RingBuffer<value_type>::increment_head_() {
-  ++head_;
-  ++size_;
-  if (head_ >= capacity_) {
-    head_ = 0;
-  }
-}
-template <typename value_type> void RingBuffer<value_type>::increment_tail_() {
-  ++tail_;
-  --size_;
-  if (tail_ >= capacity_) {
-    tail_ = 0;
-  }
-}
-
-BatchedBuffer::BatchedBuffer(const std::chrono::milliseconds &batch_capacity,
-                             const std::chrono::milliseconds &buffer_capacity,
+BatchedBuffer::BatchedBuffer(const std::chrono::milliseconds &buffer_capacity,
                              const std::chrono::milliseconds &carry_over_capacity)
-    : batch_capacity_(time_to_count(batch_capacity)),
-      carry_over_capacity_(time_to_count(carry_over_capacity)), batch_idx_(0),
-      carry_over_audio_(carry_over_capacity_), audio_buffer_(time_to_count(buffer_capacity)) {
+    : carry_over_capacity_(time_to_count(carry_over_capacity)), 
+      audio_buffer_(time_to_count(buffer_capacity)) {
 
       };
 
@@ -57,36 +17,27 @@ void BatchedBuffer::enqueue(const std::vector<std::int16_t> &audio) {
   }
 }
 
-std::vector<float> BatchedBuffer::dequeue() {
+void BatchedBuffer::dequeue(std::vector<float> & result) {
   std::lock_guard<std::mutex> lock(mutex_);
-  bool new_batch = require_new_batch_();
-  if (new_batch) {
-    ++batch_idx_;
-    carry_over_();
-  }
-  audio_.reserve(audio_.size() + audio_buffer_.size());
+  result.reserve(result.size() + audio_buffer_.size());
   for (std::size_t i = 0; i < audio_buffer_.size(); ++i) {
-    audio_.push_back(static_cast<float>(audio_buffer_.dequeue()) /
+    result.push_back(static_cast<float>(audio_buffer_.dequeue()) /
                      static_cast<float>(std::numeric_limits<std::int16_t>::max()));
   }
-  return audio_;
 }
 
-bool BatchedBuffer::require_new_batch_() {
-  return (audio_.size() + audio_buffer_.size()) > batch_capacity_;
-}
-
-void BatchedBuffer::carry_over_() {
-  carry_over_audio_.insert(carry_over_audio_.begin(), audio_.end() - carry_over_capacity_,
-                           audio_.end());
-  audio_.clear();
-  audio_.insert(audio_.end(), carry_over_audio_.begin(), carry_over_audio_.end());
+void BatchedBuffer::clear_and_carry_over_(std::vector<float> & data) {
+  size_t carry_over_samples = std::min(data.size(), carry_over_capacity_);
+  std::vector<float> carry_over_audio;
+  carry_over_audio.reserve(carry_over_samples);
+  carry_over_audio.insert(carry_over_audio.begin(), data.end() - carry_over_samples, 
+                            data.end());
+  data.clear();
+  data.insert(data.begin(), carry_over_audio.begin(), carry_over_audio.end());
 }
 
 void BatchedBuffer::clear() {
   std::lock_guard<std::mutex> lock(mutex_);
-  batch_idx_ = 0;
-  audio_.clear();
   audio_buffer_.clear();
 }
 } // end of namespace whisper

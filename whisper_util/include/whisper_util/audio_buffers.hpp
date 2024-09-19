@@ -6,6 +6,9 @@
 #include <mutex>
 #include <vector>
 
+// #include <ostream>
+#include <iostream>
+
 #include "whisper.h"
 
 namespace whisper {
@@ -30,6 +33,11 @@ public:
   RingBuffer(const std::size_t &capacity);
 
   void enqueue(const_reference data);
+  void enqueue(const std::vector<value_type> data);
+
+  // Returns all data in the buffer
+  std::vector<value_type> peak();
+
   value_type dequeue();
   inline bool is_full() const { return size_ == capacity_; }
   void clear();
@@ -50,11 +58,10 @@ protected:
 
 /**
  * @brief A thread-safe buffer for storing audio data. The user enqueues data from an audio stream
- * in thread A and dequeues data in thread B. When the maximum batch capacity is reached, the audio
- * data is cleared, but a carry-over buffer is kept to mitigate line-breaks.
- *
+ * in thread A and dequeues data in thread B. 
+ * 
  * Thread A: enqueue into audio_buffer_ (ring buffer)
- * Thread B: dequeue from audio_buffer_ and store into audio_ up to batch_capacity_
+ * Thread B: dequeue from audio_buffer_ and store into external array
  *
  * The buffer should be dequeued quicker than buffer_capacity_ to avoid loss of data.
  *
@@ -62,30 +69,103 @@ protected:
 class BatchedBuffer {
 public:
   BatchedBuffer(
-      const std::chrono::milliseconds &batch_capacity = std::chrono::seconds(6),
       const std::chrono::milliseconds &buffer_capacity = std::chrono::seconds(2),
       const std::chrono::milliseconds &carry_over_capacity = std::chrono::milliseconds(200));
 
   void enqueue(const std::vector<std::int16_t> &audio);
-  std::vector<float> dequeue();
-  void clear();
 
+  // Dequeue data from the buffer and store it in the result vector
+  void dequeue(std::vector<float> & result);
+
+  // Clear the external data buffer, copy over the last carry_over_capacity ms of data
+  void clear_and_carry_over_(std::vector<float> & data);
+
+  void clear();
   inline const std::size_t &buffer_size() const { return audio_buffer_.size(); };
-  inline const std::uint16_t &batch_idx() const { return batch_idx_; };
 
 protected:
-  bool require_new_batch_();
-  void carry_over_();
 
   std::mutex mutex_;
 
-  std::size_t batch_capacity_;
   std::size_t carry_over_capacity_;
-  std::uint16_t batch_idx_;
 
-  std::vector<float> audio_;
-  std::vector<float> carry_over_audio_;
   RingBuffer<std::int16_t> audio_buffer_;
 };
+
+
+
+/*
+Templated function implementation.
+*/
+template <typename value_type>
+RingBuffer<value_type>::RingBuffer(const std::size_t &capacity)
+    : capacity_(capacity), buffer_(capacity) {
+  clear();
+};
+
+template <typename value_type> void RingBuffer<value_type>::enqueue(const_reference data) {
+  if (is_full()) {
+    /* This warning would be printed constantly due to InferenceNode::audio_data_ 
+            always overwritting data to keep a full history.
+    */
+    std::cerr << "Warning: RingBuffer is full. Dropping data." << std::endl;
+    // increment_tail_();
+  }
+ 
+  increment_head_();
+  if (is_full()) {
+    /* This warning would be printed constantly due to InferenceNode::audio_data_ 
+            always overwritting data to keep a full history.
+    */
+    // std::cerr << "Warning: RingBuffer is full. Dropping data." << std::endl;
+    increment_tail_();
+  }
+  buffer_[head_] = data;
+}
+
+template <typename value_type> void RingBuffer<value_type>::enqueue(const std::vector<value_type> data) {
+  for(const auto &d : data) {
+    enqueue(d);
+  }
+}
+
+template <typename value_type> value_type RingBuffer<value_type>::dequeue() {
+  increment_tail_();
+  return buffer_[tail_];
+}
+
+template <typename value_type> std::vector<value_type> RingBuffer<value_type>::peak() {
+  std::vector<value_type> result; 
+  result.reserve(size_);
+  for (std::size_t i = 0; i < size_; ++i) {
+    result.push_back(buffer_[(tail_ + i) % capacity_]);
+  }
+  return result;
+}
+
+template <typename value_type> void RingBuffer<value_type>::clear() {
+  head_ = 0;
+  tail_ = 0;
+  size_ = 0;
+}
+
+template <typename value_type> void RingBuffer<value_type>::increment_head_() {
+  ++head_;
+  ++size_;
+  if (head_ >= capacity_) {
+    head_ = 0;
+  }
+}
+template <typename value_type> void RingBuffer<value_type>::increment_tail_() {
+  ++tail_;
+  --size_;
+  if (tail_ >= capacity_) {
+    tail_ = 0;
+  }
+}
+
 } // end of namespace whisper
+
+
+
 #endif // WHISPER_UTIL__AUDIO_BUFFERS_HPP_
