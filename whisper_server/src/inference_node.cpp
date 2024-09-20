@@ -121,11 +121,11 @@ InferenceNode::on_parameter_set_(const std::vector<rclcpp::Parameter> &parameter
     }
     if (parameter.get_name() == "active") {
       // Abort goal if becoming active and current action server
-      if (parameter.as_bool() && active_goal_) {
-        RCLCPP_WARN(node_ptr_->get_logger(), "Aborting current goal.  Subscribe to %s", 
-                                  publisher_->get_topic_name());
-        active_goal_->abort(std::make_shared<Inference::Result>());
-      }
+      // if (parameter.as_bool() && active_goal_) {
+      //   RCLCPP_WARN(node_ptr_->get_logger(), "Aborting current goal.  Subscribe to %s", 
+      //                             publisher_->get_topic_name());
+      //   active_goal_->abort(std::make_shared<Inference::Result>());
+      // }
       // Set new parameter
       active_ = parameter.as_bool();
       RCLCPP_INFO(node_ptr_->get_logger(), "Parameter %s set to %d.", parameter.get_name().c_str(),
@@ -177,10 +177,10 @@ InferenceNode::on_inference_(const rclcpp_action::GoalUUID & /*uuid*/,
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  if (active_goal_) {
-    RCLCPP_INFO(node_ptr_->get_logger(), "Preempting the currently active goal.");
-    active_goal_->abort(std::make_shared<Inference::Result>());
-  }
+  // if (active_goal_) {
+  //   RCLCPP_INFO(node_ptr_->get_logger(), "Preempting the currently active goal.");
+  //   active_goal_->abort(std::make_shared<Inference::Result>());
+  // }
 
   RCLCPP_INFO(node_ptr_->get_logger(), "Received inference request.");
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -197,7 +197,7 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
   auto feedback = std::make_shared<Inference::Feedback>();
   auto result = std::make_shared<Inference::Result>();
   inference_start_time_ = node_ptr_->now();
-  active_goal_ = goal_handle;
+  // active_goal_ = goal_handle;
   int batch_idx = 0;
 
   while (rclcpp::ok()) {
@@ -213,6 +213,14 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
       result->info = "Inference cancelled.";
       RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
       goal_handle->canceled(result);
+      batched_buffer_->clear();
+      return;
+    }
+
+    if (active_) {
+      result->info = "Action server stopped.  Subscribe to continuously published topic.";
+      RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
+      goal_handle->succeed(result);
       batched_buffer_->clear();
       return;
     }
@@ -247,7 +255,7 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
     batched_buffer_->clear();
   }
 
-  active_goal_.reset();
+  // active_goal_.reset();
 }
 
 std::string InferenceNode::inference_(const std::vector<float> &audio) {

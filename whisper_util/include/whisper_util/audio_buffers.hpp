@@ -104,20 +104,8 @@ RingBuffer<value_type>::RingBuffer(const std::size_t &capacity)
 };
 
 template <typename value_type> void RingBuffer<value_type>::enqueue(const_reference data) {
-  if (is_full()) {
-    /* This warning would be printed constantly due to InferenceNode::audio_data_ 
-            always overwritting data to keep a full history.
-    */
-    std::cerr << "Warning: RingBuffer is full. Dropping data." << std::endl;
-    // increment_tail_();
-  }
- 
   increment_head_();
   if (is_full()) {
-    /* This warning would be printed constantly due to InferenceNode::audio_data_ 
-            always overwritting data to keep a full history.
-    */
-    // std::cerr << "Warning: RingBuffer is full. Dropping data." << std::endl;
     increment_tail_();
   }
   buffer_[head_] = data;

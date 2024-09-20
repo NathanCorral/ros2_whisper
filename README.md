@@ -25,5 +25,20 @@ Configure `whisper` parameters in [whisper.yaml](whisper_server/config/whisper.y
 ## Available Actions
 Action server under topic `inference` of type [Inference.action](whisper_idl/action/Inference.action).
 
+## Publishers
+
+To enable constant publishing of the audio transcript, set the /whisper/interface node's active parameter to true:
+
+```bash
+ros2 param set /whisper/inference active true
+ros2 topic echo /whisper/audio_transcript
+```
+
+- Setting the parameter may require the currently running action to complete.
+- Enabling the publisher will reject future action server goals.
+
+
+
 ## Troubleshoot
+
 - Encoder inference time: https://github.com/ggerganov/whisper.cpp/issues/10#issuecomment-1302462960

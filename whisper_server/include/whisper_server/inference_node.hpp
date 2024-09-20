@@ -46,7 +46,7 @@ protected:
   void on_audio_(const std_msgs::msg::Int16MultiArray::SharedPtr msg);
 
   // action server
-  std::shared_ptr<GoalHandleInference> active_goal_;
+  // std::shared_ptr<GoalHandleInference> active_goal_;
   rclcpp_action::Server<Inference>::SharedPtr inference_action_server_;
   rclcpp_action::GoalResponse on_inference_(const rclcpp_action::GoalUUID &uuid,
                                             std::shared_ptr<const Inference::Goal> goal);
