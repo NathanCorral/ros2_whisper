@@ -77,7 +77,7 @@ protected:
 };
 
 /* Helper function */
-inline template<typename T> void declare_param(
+template<typename T> void declare_param(
   std::shared_ptr<rclcpp::Node> node_ptr, 
   const std::string& param_name, 
   const T& default_value, 

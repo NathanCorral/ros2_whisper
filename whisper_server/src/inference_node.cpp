@@ -198,6 +198,7 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
   auto result = std::make_shared<Inference::Result>();
   inference_start_time_ = node_ptr_->now();
   active_goal_ = goal_handle;
+  int batch_idx = 0;
 
   while (rclcpp::ok()) {
     if (node_ptr_->now() - inference_start_time_ > goal_handle->get_goal()->max_duration) {
@@ -232,7 +233,7 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
 
     // feedback to client
     feedback->transcription = transcription;
-    // feedback->batch_idx = batched_buffer_->batch_idx();
+    feedback->batch_idx = batch_idx++;
     goal_handle->publish_feedback(feedback);
 
     // update inference result
