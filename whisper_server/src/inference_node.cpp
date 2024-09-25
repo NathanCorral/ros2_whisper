@@ -270,6 +270,51 @@ std::string InferenceNode::inference_(const std::vector<float> &audio) {
   }
   //   std::vector<std::pair<rclcpp::Time, std::string>> transcript;
   // transcript.push_back(std::make_pair(inference_start_time, transcription));
+
+// std::vector<whisper_token>
+  std::vector<std::string> texts;
+  std::vector<float> probs;
+  RCLCPP_WARN(node_ptr_->get_logger(), "Getting PRobabilities\n");
+  auto p = whisper_->p(texts, probs);
+  // Print out the size of texts and probs arrays:
+  RCLCPP_INFO(node_ptr_->get_logger(), "texts size %ld,   probs size %ld", texts.size(), probs.size());
+
+  // loop through the text and probabilities arrays,  they should be the same size but check in case
+  std::ofstream myfile;
+  std::ofstream myprobs;
+  // append to file "test.txt"
+  myfile.open("test_text.txt", std::ios_base::app); 
+  myprobs.open("test_probs.csv", std::ios_base::app); 
+
+  // Use a stringstream to accumulate and print out the texts
+  // std::stringstream ss;
+  myfile << "{";
+  for (size_t i = 0; i < texts.size(); i++) {
+    // If the text starts with "[_" and ends with "]", 
+    //  then it is a whisper specific token so skip it
+    if (texts[i].substr(0, 2) == "[_" && texts[i].substr(texts[i].size() - 1, 1) == "]") {
+      continue;
+    }
+    myfile << '"' << texts[i] << '"';
+    myprobs << probs[i];
+    if (i < texts.size() - 2) {
+      myfile << ", ";
+      myprobs << ",";
+    }
+  }
+  myfile << "}\n";
+  myprobs << "\n";
+  // RCLCPP_INFO(node_ptr_->get_logger(), "%s\n", ss.str().c_str());
+  // for (size_t i = 0; i < texts.size(); i++) {
+  //   std::string t = texts[i];
+  //   const float  p = probs[i];
+  //   // print out the texts and the probability
+  //   RCLCPP_INFO(node_ptr_->get_logger(), "%f>>> %s\n", p, t.c_str());
+  // }
+  // printf("%f>>> %s\n", p, text);
+
   return transcription;
 }
+
+
 } // end of namespace whisper

@@ -34,4 +34,49 @@ std::vector<whisper_token> Whisper::tokens() {
   }
   return tokens;
 }
+
+// std::vector<whisper_token> Whisper::p(std::vector<std::string> & texts, std::vector<float> probs) {
+//   std::vector<whisper_token> tokens;
+  
+//   const int n_segments = whisper_full_n_segments(ctx);
+//   for (int i = 0; i < n_segments; ++i) {
+//     const int token_count = whisper_full_n_tokens(ctx, i);
+//     for (int j = 0; j < token_count; ++j) {
+//       tokens.push_back(whisper_full_get_token_id(ctx, i, j));
+//       const char * text = whisper_full_get_token_text(ctx, i, j);
+//       const float  p    = whisper_full_get_token_p   (ctx, i, j);
+//       // Convert text to std::string and push back in texts
+//       texts.push_back(text);      
+//       probs.push_back(p);
+//     }
+//   }
+//   return tokens;
+// }
+
+std::vector<whisper_token> Whisper::p(std::vector<std::string> & texts, std::vector<float> & probs) { // Pass probs by reference too
+    std::vector<whisper_token> tokens;
+  
+    const int n_segments = whisper_full_n_segments(ctx);
+    for (int i = 0; i < n_segments; ++i) {
+        const int token_count = whisper_full_n_tokens(ctx, i);
+        for (int j = 0; j < token_count; ++j) {
+            tokens.push_back(whisper_full_get_token_id(ctx, i, j));
+
+            const char * text = whisper_full_get_token_text(ctx, i, j);
+            const float  p    = whisper_full_get_token_p   (ctx, i, j);
+
+            // Synchronize texts and probs within the same statement block
+            if (text != nullptr) {   // Safeguard against null pointers
+                texts.push_back(text);
+                probs.push_back(p);
+            }
+        }
+    }
+
+    // Optional: check if they have the same size before returning
+    assert(texts.size() == probs.size() && "texts and probs size mismatch!");
+
+    return tokens;
+}
+
 } // end of namespace whisper
