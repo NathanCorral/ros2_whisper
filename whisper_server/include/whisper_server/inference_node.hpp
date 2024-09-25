@@ -6,7 +6,6 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
-#include <chrono>
 
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -35,7 +34,6 @@ protected:
 
   // parameters
   int step_ms_;
-  int length_ms_;
   void declare_parameters_();
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr on_parameter_set_handle_;
   rcl_interfaces::msg::SetParametersResult
@@ -62,6 +60,7 @@ protected:
   void timer_callback();
 
   // whisper audio data storage
+  int length_ms_;
   size_t step_samples_;
   std::unique_ptr<BatchedBuffer> batched_buffer_; // Enqueue into this
   std::vector<float> new_audio_data_; // Dequeue into this

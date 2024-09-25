@@ -34,8 +34,7 @@ ros2 param set /whisper/inference active true
 ros2 topic echo /whisper/audio_transcript
 ```
 
-- Setting the parameter may require the currently running action to complete.
-- Enabling the publisher will reject future action server goals.
+- Enabling the publisher will cause the action server to reject goals.
 
 
 

@@ -60,6 +60,8 @@ void InferenceNode::declare_parameters_() {
                         "Length of (previous) audio data to process together as a batch.");
 
   // whisper parameters
+  // consider other parameters:
+  // https://github.com/ggerganov/whisper.cpp/blob/a4bb2df36aeb4e6cfb0c1ca9fbcf749ef39cc852/whisper.h#L351
   declare_param(node_ptr_, "model_name", "base.en", 
               "Name of the Whisper model to be used.");
   declare_param(node_ptr_, "wparams.language", "en", 
