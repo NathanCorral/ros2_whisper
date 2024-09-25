@@ -54,10 +54,10 @@ void InferenceNode::declare_parameters_() {
                         "Capacity of the incomming audio buffer in seconds.");
   declare_param(node_ptr_, "carry_over_capacity", 200, 
                         "audio to keep from previous step in ms.");
-  declare_param(node_ptr_, "length_ms", 3000, 
-                        "Length of (previous) audio data to process together as a batch.");
   declare_param(node_ptr_, "step_ms", 3000, 
                         "Publish/give feedback every step_ms in ms.");
+  declare_param(node_ptr_, "length_ms", 3000, 
+                        "Length of (previous) audio data to process together as a batch.");
 
   // whisper parameters
   declare_param(node_ptr_, "model_name", "base.en", 
@@ -120,12 +120,6 @@ InferenceNode::on_parameter_set_(const std::vector<rclcpp::Parameter> &parameter
       continue;
     }
     if (parameter.get_name() == "active") {
-      // Abort goal if becoming active and current action server
-      // if (parameter.as_bool() && active_goal_) {
-      //   RCLCPP_WARN(node_ptr_->get_logger(), "Aborting current goal.  Subscribe to %s", 
-      //                             publisher_->get_topic_name());
-      //   active_goal_->abort(std::make_shared<Inference::Result>());
-      // }
       // Set new parameter
       active_ = parameter.as_bool();
       RCLCPP_INFO(node_ptr_->get_logger(), "Parameter %s set to %d.", parameter.get_name().c_str(),
@@ -152,7 +146,7 @@ void InferenceNode::timer_callback()
 
   // While dequeue-ing, data is automatically removed from the internal buffer
   batched_buffer_->dequeue(new_audio_data_);
-  if (new_audio_data_.size() <  step_samples_) {
+  if (new_audio_data_.size() < step_samples_) {
     return;
   }
 
@@ -177,11 +171,6 @@ InferenceNode::on_inference_(const rclcpp_action::GoalUUID & /*uuid*/,
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  // if (active_goal_) {
-  //   RCLCPP_INFO(node_ptr_->get_logger(), "Preempting the currently active goal.");
-  //   active_goal_->abort(std::make_shared<Inference::Result>());
-  // }
-
   RCLCPP_INFO(node_ptr_->get_logger(), "Received inference request.");
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
@@ -197,7 +186,7 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
   auto feedback = std::make_shared<Inference::Feedback>();
   auto result = std::make_shared<Inference::Result>();
   inference_start_time_ = node_ptr_->now();
-  // active_goal_ = goal_handle;
+  // Manually assign a batch
   int batch_idx = 0;
 
   while (rclcpp::ok()) {
@@ -254,8 +243,6 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
     goal_handle->succeed(result);
     batched_buffer_->clear();
   }
-
-  // active_goal_.reset();
 }
 
 std::string InferenceNode::inference_(const std::vector<float> &audio) {

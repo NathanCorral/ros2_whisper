@@ -46,7 +46,6 @@ protected:
   void on_audio_(const std_msgs::msg::Int16MultiArray::SharedPtr msg);
 
   // action server
-  // std::shared_ptr<GoalHandleInference> active_goal_;
   rclcpp_action::Server<Inference>::SharedPtr inference_action_server_;
   rclcpp_action::GoalResponse on_inference_(const rclcpp_action::GoalUUID &uuid,
                                             std::shared_ptr<const Inference::Goal> goal);
@@ -58,7 +57,6 @@ protected:
 
   // publisher
   bool active_;
-  // std::vector<std::pair<rclcpp::Time, std::string>> transcript;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr publisher_;
   rclcpp::TimerBase::SharedPtr timer_;
   void timer_callback();
