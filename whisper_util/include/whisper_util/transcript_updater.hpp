@@ -1,3 +1,7 @@
+#ifndef WHISPER_UTIL__TRANSCRIPT_UPDATER_HPP_
+#define WHISPER_UTIL__TRANSCRIPT_UPDATER_HPP_
+
+
 #include <iostream>
 #include <vector>
 #include <string>
@@ -23,7 +27,7 @@
 //      - Comparisons
 //      - Insertions 
 
-
+namespace whisper {
 class TranscriptUpdater {
 public:
     TranscriptUpdater(int allowed_str_edit = 1, int allowed_str_min_len = 4, int allowed_substr_gaps = 10, float reduced_update_prob = 0.8)
@@ -75,3 +79,5 @@ private:
     // A list of Punctuation which will all be set to the same value when matching
     std::vector<std::string> punctuation_map = { ",", ".", "...", "?", "!", ":", ";"};
 };
+} // end of namespace whisper
+#endif // WHISPER_UTIL__TRANSCRIPT_UPDATER_HPP_

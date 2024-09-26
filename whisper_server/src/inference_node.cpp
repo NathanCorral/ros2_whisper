@@ -2,7 +2,7 @@
 
 namespace whisper {
 InferenceNode::InferenceNode(const rclcpp::Node::SharedPtr node_ptr)
-    : node_ptr_(node_ptr), language_("en") {
+    : node_ptr_(node_ptr), language_("en"), last_update_idx(0), update_idx(0) {
   declare_parameters_();
 
   auto cb_group = node_ptr_->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
@@ -141,11 +141,17 @@ InferenceNode::on_parameter_set_(const std::vector<rclcpp::Parameter> &parameter
 }
 
 void InferenceNode::on_audio_(const std_msgs::msg::Int16MultiArray::SharedPtr msg) {
+  if (batched_buffer_->full()) {
+    RCLCPP_WARN(node_ptr_->get_logger(), "Buffer is full. Dropping audio data.");
+    return;
+  }
   batched_buffer_->enqueue(msg->data);
 }
 
 void InferenceNode::timer_callback()
 {
+  // Always write un-updated data from transcript to file
+
   if (!active_) {
     return;
   }
@@ -177,11 +183,6 @@ InferenceNode::on_inference_(const rclcpp_action::GoalUUID & /*uuid*/,
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  // if (active_goal_) {
-  //   RCLCPP_INFO(node_ptr_->get_logger(), "Preempting the currently active goal.");
-  //   active_goal_->abort(std::make_shared<Inference::Result>());
-  // }
-
   RCLCPP_INFO(node_ptr_->get_logger(), "Received inference request.");
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
@@ -197,11 +198,13 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
   auto feedback = std::make_shared<Inference::Feedback>();
   auto result = std::make_shared<Inference::Result>();
   inference_start_time_ = node_ptr_->now();
-  // active_goal_ = goal_handle;
   int batch_idx = 0;
 
   while (rclcpp::ok()) {
     if (node_ptr_->now() - inference_start_time_ > goal_handle->get_goal()->max_duration) {
+      auto str = std::accumulate(transcript.transcript.begin(), 
+                                  transcript.transcript.end(), std::string());
+      result->transcriptions.push_back(str);
       result->info = "Inference timed out.";
       RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
       goal_handle->succeed(result);
@@ -210,6 +213,9 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
     }
 
     if (goal_handle->is_canceling()) {
+      auto str = std::accumulate(transcript.transcript.begin(), 
+                                  transcript.transcript.end(), std::string());
+      result->transcriptions.push_back(str);
       result->info = "Inference cancelled.";
       RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
       goal_handle->canceled(result);
@@ -218,6 +224,9 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
     }
 
     if (active_) {
+      auto str = std::accumulate(transcript.transcript.begin(), 
+                                  transcript.transcript.end(), std::string());
+      result->transcriptions.push_back(str);
       result->info = "Action server stopped.  Subscribe to continuously published topic.";
       RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
       goal_handle->succeed(result);
@@ -245,17 +254,145 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
     goal_handle->publish_feedback(feedback);
 
     // update inference result
-    result->transcriptions.push_back(feedback->transcription);
+    // result->transcriptions.push_back(feedback->transcription);
   }
 
   if (rclcpp::ok()) {
+    auto str = std::accumulate(transcript.transcript.begin(), 
+                                  transcript.transcript.end(), std::string());
+    result->transcriptions.push_back(str);
     result->info = "Inference succeeded.";
-    RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
+    RCLCPP_INFO(node_ptr_->get_logger(), str.c_str());
     goal_handle->succeed(result);
     batched_buffer_->clear();
   }
+}
 
-  // active_goal_.reset();
+void write_to_file(std::string filename, std::vector<std::string> texts, std::vector<float> probs) {
+  std::ofstream test_file;
+  std::ofstream probs_file;
+  test_file.open(filename + "_text_tokens.txt", std::ios_base::app); 
+  probs_file.open(filename + "_probs_tokens.csv", std::ios_base::app); 
+
+  test_file << "{";
+  for (size_t i = 0; i < texts.size(); i++) {
+    // If the text starts with "[_" and ends with "]", 
+    //  then it is a whisper specific token so skip it
+    if (texts[i].substr(0, 2) == "[_" && texts[i].substr(texts[i].size() - 1, 1) == "]") {
+      continue;
+    }
+    test_file << '"' << texts[i] << '"';
+    probs_file << probs[i];
+    if (i < texts.size() - 2) {
+      test_file << ", ";
+      probs_file << ",";
+    }
+  }
+  test_file << "}\n";
+  probs_file << "\n";
+
+  test_file.close();
+  probs_file.close();
+}
+
+// Helper function to calculate the maximum length at compile time
+constexpr size_t find_longest_length(const std::array<std::string_view, 5>& arr) {
+    size_t max_len = 0;
+    for (const auto& str : arr) {
+        if (str.size() > max_len) {
+            max_len = str.size();
+        }
+    }
+    return max_len;
+}
+
+std::string normalizeString(const std::string& str){
+  std::string result;
+    
+  // Convert to lowercase and remove whitespace in one pass
+  for (char ch : str) {
+      if (!std::isspace(static_cast<unsigned char>(ch))) { // skip whitespace
+          result += std::tolower(static_cast<unsigned char>(ch));
+      }
+  }
+
+  return result;
+}
+
+std::pair<std::string, float> InferenceNode::try_combine(const std::vector<std::string>& texts, 
+                                        const std::vector<float>& probs, size_t& i) {
+  // List of special sequences we want to check for
+  // Important:  Ordered by string length,
+  //    TODO:  Do this at compile time
+  // constexpr std::array<std::string, 8> targets_sorted = {
+  //   "(sighs)",
+  //   "(claps)",
+  //   "[claps]",
+  //   "[typing]",
+  //   "[silence]",
+  //   "[ Silence ]",
+  //   "[BLANK_AUDIO]",
+  //   "(keyboard clicking)",
+  // };
+  // constexpr size_t longest_length = find_longest_length(targets_sorted);
+  std::array<std::string, 11> targets_sorted = {
+    " (sighs)",
+    " (claps)",
+    " [claps]",
+    " [click]",
+    " [typing]",
+    " [silence]",
+    " (clicking)",
+    " [ Silence ]",
+    " [BLANK_AUDIO]",
+    " (keyboard clicking)",
+    " [click click click]",
+  };
+  size_t longest_length = targets_sorted[targets_sorted.size()-1].size();
+
+  size_t start = i;
+  size_t cur_idx = 0;
+  std::string candidate = texts[start++];
+  while (start < texts.size() && candidate.size() <= longest_length) {
+    // Check if first character is "(" or "["
+    // RCLCPP_INFO(node_ptr_->get_logger(), ("Comparing '" + candidate + "' to " + targets_sorted[cur_idx]).c_str());
+    // if(!(start == 1 && (candidate[1] == '(' || candidate[1] == '['))) {
+      // RCLCPP_INFO(node_ptr_->get_logger(), "STOPLOOP 1!");
+    //   break;
+    // }
+    // Check if we are out of comparisons
+    if (cur_idx >= targets_sorted.size()) {
+      break;
+    }
+
+    // Check if we should match next value in array
+    if(candidate.size() > targets_sorted[cur_idx].size()) {
+      cur_idx++;
+      continue;
+    }
+    // Try and find a match
+    else if(candidate.size() == targets_sorted[cur_idx].size()) {
+      // RCLCPP_INFO(node_ptr_->get_logger(), "Size Match");
+      if(candidate == targets_sorted[cur_idx]) {
+        // RCLCPP_INFO(node_ptr_->get_logger(), ("Match Found :'" + candidate + "'").c_str());
+        auto avg_prob = std::accumulate(probs.begin() + i, probs.begin() + start, 0.0f) / (start - i);
+        i = start-1;
+        // RCLCPP_INFO(node_ptr_->get_logger(), ("DEBUG LAST CHARACTER :'" + texts[i] + "'").c_str());
+        return { candidate, avg_prob };
+      } else {
+        // Try next candidate
+        cur_idx++;
+        continue;
+      }
+    } 
+    // RCLCPP_INFO(node_ptr_->get_logger(), "String Extended");
+    // else: candidate.length() < targets_sorted[cur_idx].length()
+    candidate += texts[start++];
+  }
+
+  // If no match is found, return the current element with its probability
+  std::pair<std::string, float> result = {texts[i], probs[i]};
+  return result;
 }
 
 std::string InferenceNode::inference_(const std::vector<float> &audio) {
@@ -268,53 +405,62 @@ std::string InferenceNode::inference_(const std::vector<float> &audio) {
                 "Inference took longer than audio buffer size. This leads to un-inferenced audio "
                 "data. Consider increasing thread number or compile with accelerator support.");
   }
-  //   std::vector<std::pair<rclcpp::Time, std::string>> transcript;
+  return transcription;
+  // std::vector<std::pair<rclcpp::Time, std::string>> transcript;
   // transcript.push_back(std::make_pair(inference_start_time, transcription));
 
-// std::vector<whisper_token>
+  // Get probabilites for each token
   std::vector<std::string> texts;
   std::vector<float> probs;
-  RCLCPP_WARN(node_ptr_->get_logger(), "Getting PRobabilities\n");
-  auto p = whisper_->p(texts, probs);
-  // Print out the size of texts and probs arrays:
-  RCLCPP_INFO(node_ptr_->get_logger(), "texts size %ld,   probs size %ld", texts.size(), probs.size());
+  whisper_->p(texts, probs);
 
-  // loop through the text and probabilities arrays,  they should be the same size but check in case
-  std::ofstream myfile;
-  std::ofstream myprobs;
-  // append to file "test.txt"
-  myfile.open("test_text.txt", std::ios_base::app); 
-  myprobs.open("test_probs.csv", std::ios_base::app); 
+  std::ofstream test_file; 
+  std::ofstream probs_file;
+  if (WRITE_TEXT_PROBS_TO_FILE) {
+    test_file.open("text_tokens.txt", std::ios_base::app); 
+    probs_file.open("probs_tokens.csv", std::ios_base::app); 
+    test_file << "{";
+  }
 
-  // Use a stringstream to accumulate and print out the texts
-  // std::stringstream ss;
-  myfile << "{";
+  // Update our transcript with the new data
+  TranscriptData update;
   for (size_t i = 0; i < texts.size(); i++) {
     // If the text starts with "[_" and ends with "]", 
     //  then it is a whisper specific token so skip it
     if (texts[i].substr(0, 2) == "[_" && texts[i].substr(texts[i].size() - 1, 1) == "]") {
       continue;
     }
-    myfile << '"' << texts[i] << '"';
-    myprobs << probs[i];
-    if (i < texts.size() - 2) {
-      myfile << ", ";
-      myprobs << ",";
+
+    std::pair<std::string, float> combined_token = try_combine(texts, probs, i);
+    // Favor text in the middle of the update
+    if ( i < texts.size()*0.1 || i > texts.size()*0.9 ) {
+      combined_token.second *= 0.3;
+    }
+    update.append(combined_token.first, combined_token.second);
+
+    if (WRITE_TEXT_PROBS_TO_FILE) {
+      test_file << '"' << combined_token.first << '"';
+      probs_file << combined_token.second;
+      if (i+2 < texts.size()) {
+        test_file << ", ";
+        probs_file << ",";
+      }
     }
   }
-  myfile << "}\n";
-  myprobs << "\n";
-  // RCLCPP_INFO(node_ptr_->get_logger(), "%s\n", ss.str().c_str());
-  // for (size_t i = 0; i < texts.size(); i++) {
-  //   std::string t = texts[i];
-  //   const float  p = probs[i];
-  //   // print out the texts and the probability
-  //   RCLCPP_INFO(node_ptr_->get_logger(), "%f>>> %s\n", p, t.c_str());
-  // }
-  // printf("%f>>> %s\n", p, text);
+  
+  if (WRITE_TEXT_PROBS_TO_FILE) {
+    test_file << "}\n";
+    probs_file << "\n";
+
+    test_file.close();
+    probs_file.close();
+  }
+
+  auto new_update_idx = updater.lcs_merge(transcript, update, last_update_idx);
+  last_update_idx = update_idx;
+  update_idx = new_update_idx;
 
   return transcription;
 }
-
 
 } // end of namespace whisper

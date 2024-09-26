@@ -83,6 +83,8 @@ public:
   void clear();
   inline const std::size_t &buffer_size() const { return audio_buffer_.size(); };
 
+  inline bool full() const { return audio_buffer_.is_full(); }
+
 protected:
 
   std::mutex mutex_;

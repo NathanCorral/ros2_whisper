@@ -1,6 +1,7 @@
-#include "transcript_updater.hpp"
+#include "whisper_util/transcript_updater.hpp"
 
-
+namespace whisper {
+    
 // Print debug message if DEBUG_MODE is enabled
 void TranscriptUpdater::print_debug(const std::string& message, const bool new_line) const {
     if (DEBUG_MODE) {
@@ -423,3 +424,4 @@ std::pair<int, int> find_longest_substr(const std::vector<int>& lcs_ids_update,
 
     return {longest_substr_best, longest_substr_start};
 }
+} // end of namespace whisper

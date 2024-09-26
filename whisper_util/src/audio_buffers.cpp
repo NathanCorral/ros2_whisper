@@ -40,4 +40,6 @@ void BatchedBuffer::clear() {
   std::lock_guard<std::mutex> lock(mutex_);
   audio_buffer_.clear();
 }
+
+
 } // end of namespace whisper

@@ -20,7 +20,7 @@ public:
   void initialize(const std::string &model_path);
   std::string forward(const std::vector<float> &input);
   std::vector<whisper_token> tokens();
-  std::vector<whisper_token> p(std::vector<std::string> & texts, std::vector<float> & probs);
+  void p(std::vector<std::string> & texts, std::vector<float> & probs);
 
   whisper_context *ctx;
   whisper_full_params wparams;

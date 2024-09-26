@@ -10,6 +10,8 @@
 //  reading writing files
 #include <iostream>
 #include <fstream>
+#include <array>
+#include <string_view>  // For compile-time string views
 
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -22,6 +24,10 @@
 #include "whisper_util/audio_buffers.hpp"
 #include "whisper_util/model_manager.hpp"
 #include "whisper_util/whisper.hpp"
+#include "whisper_util/transcript_updater.hpp"
+
+
+#define WRITE_TEXT_PROBS_TO_FILE 0
 
 namespace whisper {
 
@@ -77,6 +83,14 @@ protected:
   std::unique_ptr<Whisper> whisper_;
   std::string language_;
   void initialize_whisper_();
+
+  // Transcription 
+  TranscriptUpdater updater;
+  TranscriptData transcript;
+  int last_update_idx;
+  int update_idx;
+  std::pair<std::string, float> try_combine(const std::vector<std::string>& texts, 
+                                        const std::vector<float>& probs, size_t& i);
 };
 
 /* Helper function */

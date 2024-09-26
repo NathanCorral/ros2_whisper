@@ -1,7 +1,11 @@
+#ifndef WHISPER_UTIL__TRANSCRIPT_DATA_HPP_
+#define WHISPER_UTIL__TRANSCRIPT_DATA_HPP_
+
 #include <vector>
 #include <string>
 #include <numeric> // accumulate
 
+namespace whisper {
 class TranscriptData {
 public:
     std::vector<std::string> transcript;
@@ -32,9 +36,16 @@ public:
     }
 
     // void remove_if(const int idx);
+    void append(const std::string token, const float prob) {
+        transcript.push_back(token);
+        p.push_back(prob);
+        token_count.push_back(1);
+    }
 
     std::vector<std::string> splice(const int start, const int count) const;
     size_t size() const {
         return transcript.size();
     }
 };
+} // end of namespace whisper
+#endif // WHISPER_UTIL__TRANSCRIPT_DATA_HPP_
