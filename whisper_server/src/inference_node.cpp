@@ -10,8 +10,8 @@ InferenceNode::InferenceNode(const rclcpp::Node::SharedPtr node_ptr)
   options.callback_group = cb_group;
 
   // audio subscription
-  audio_sub_ = node_ptr_->create_subscription<std_msgs::msg::Int16MultiArray>(
-      "audio", 5, std::bind(&InferenceNode::on_audio_, this, std::placeholders::_1), options);
+  audio_sub_ = node_ptr_->create_subscription<whisper_idl::msg::AudioData>(
+      "audio", rclcpp::SensorDataQoS(), std::bind(&InferenceNode::on_audio_, this, std::placeholders::_1), options);
 
   // inference action server
   inference_action_server_ = rclcpp_action::create_server<Inference>(
@@ -24,16 +24,17 @@ InferenceNode::InferenceNode(const rclcpp::Node::SharedPtr node_ptr)
   on_parameter_set_handle_ = node_ptr_->add_on_set_parameters_callback(
       std::bind(&InferenceNode::on_parameter_set_, this, std::placeholders::_1));
 
-  // whisper data
-  batched_buffer_ = std::make_unique<BatchedBuffer>(
-      std::chrono::seconds(node_ptr_->get_parameter("buffer_capacity").as_int()),
-      std::chrono::milliseconds(node_ptr_->get_parameter("carry_over_capacity").as_int()));
+  // // whisper data
+  // auto batched_buffer_ = std::make_unique<BatchedBuffer>(
+  //     std::chrono::seconds(node_ptr_->get_parameter("buffer_capacity").as_int()),
+  //     std::chrono::milliseconds(node_ptr_->get_parameter("carry_over_capacity").as_int()));
+
   step_ms_ = node_ptr_->get_parameter("step_ms").as_int();
   step_samples_ = step_ms_ * WHISPER_SAMPLE_RATE / 1e3;
   length_ms_ = node_ptr_->get_parameter("length_ms").as_int();
-  const std::size_t length_samples = length_ms_ * WHISPER_SAMPLE_RATE / 1e3;
-  audio_data_ = std::make_unique<RingBuffer<float>>(length_samples);
-  audio_data_->enqueue(std::vector<float>(length_samples, 0.0f));
+  length_samples = length_ms_ * WHISPER_SAMPLE_RATE / 1e3;
+  // audio_data_ = std::make_unique<RingBuffer<float>>(length_samples);
+  // audio_data_->enqueue(std::vector<float>(length_samples, 0.0f));
 
   // whisper
   model_manager_ = std::make_unique<ModelManager>();
@@ -50,7 +51,7 @@ InferenceNode::InferenceNode(const rclcpp::Node::SharedPtr node_ptr)
 
 void InferenceNode::declare_parameters_() {
   // Data/Buffer parameters
-  declare_param(node_ptr_, "buffer_capacity", 2, 
+  declare_param(node_ptr_, "buffer_capacity", 10, 
                         "Capacity of the incomming audio buffer in seconds.");
   declare_param(node_ptr_, "carry_over_capacity", 200, 
                         "audio to keep from previous step in ms.");
@@ -120,16 +121,17 @@ InferenceNode::on_parameter_set_(const std::vector<rclcpp::Parameter> &parameter
       continue;
     }
     if (parameter.get_name() == "active") {
-      // Abort goal if becoming active and current action server
-      // if (parameter.as_bool() && active_goal_) {
-      //   RCLCPP_WARN(node_ptr_->get_logger(), "Aborting current goal.  Subscribe to %s", 
-      //                             publisher_->get_topic_name());
-      //   active_goal_->abort(std::make_shared<Inference::Result>());
-      // }
-      // Set new parameter
       active_ = parameter.as_bool();
       RCLCPP_INFO(node_ptr_->get_logger(), "Parameter %s set to %d.", parameter.get_name().c_str(),
                   active_);
+      continue;
+    }
+    if (parameter.get_name() == "step_ms") {
+      step_ms_ = node_ptr_->get_parameter("step_ms").as_int();
+      step_samples_ = step_ms_ * WHISPER_SAMPLE_RATE / 1e3;
+      RCLCPP_INFO(node_ptr_->get_logger(), "Parameter %s set to %d.   %s set to %ld",
+                  parameter.get_name().c_str(), active_,
+                  "step_samples_", step_samples_);
       continue;
     }
     result.reason = "Parameter " + parameter.get_name() + " not handled.";
@@ -140,37 +142,94 @@ InferenceNode::on_parameter_set_(const std::vector<rclcpp::Parameter> &parameter
   return result;
 }
 
-void InferenceNode::on_audio_(const std_msgs::msg::Int16MultiArray::SharedPtr msg) {
-  if (batched_buffer_->full()) {
-    RCLCPP_WARN(node_ptr_->get_logger(), "Buffer is full. Dropping audio data.");
+
+void InferenceNode::on_audio_(const whisper_idl::msg::AudioData::SharedPtr msg) {
+  if (in_buffer_map_.find(msg->capture_id) == in_buffer_map_.end()) {
+    initialize_data(msg->capture_id);
+
+    // // Initialize all audio data so key is valid.
+    // // Use in_buffer_map_ last and use for key itterator
+    // new_samples[msg->capture_id] = 0;
+    // audio_data_map_[msg->capture_id] =
+    // in_buffer_map_[msg->capture_id] = std::make_unique<BatchedBuffer>(
+    //     std::chrono::seconds(node_ptr_->get_parameter("buffer_capacity").as_int()),
+    //     std::chrono::milliseconds(node_ptr_->get_parameter("carry_over_capacity").as_int()));
+  } else {
+    auto& clk = *node_ptr_->get_clock();
+    RCLCPP_INFO_THROTTLE(node_ptr_->get_logger(), clk, 1000,
+                             "Audio Data Size:  %ld.", in_buffer_map_[msg->capture_id]->size());
+    in_buffer_map_[msg->capture_id]->enqueue(msg->audio_data.data);
+  }
+
+  if (in_buffer_map_[msg->capture_id]->almost_full()) {
+    // https://answers.ros.org/question/352364/ros2-throttle-logs/
+    auto& clk = *node_ptr_->get_clock();
+    RCLCPP_INFO_THROTTLE(node_ptr_->get_logger(), clk, 1000,
+                             "Buffer is full. Audio Data Dropped.");
+  }
+}
+
+void InferenceNode::initialize_data(const int &capture_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  if (in_buffer_map_.find(capture_id) != in_buffer_map_.end()) {
+    // was initialized in another thread already
     return;
   }
-  batched_buffer_->enqueue(msg->data);
+
+  new_samples[capture_id] = 0;
+  audio_data_map_[capture_id] = std::make_unique<RingBuffer<float>>(length_samples);
+  audio_data_map_[capture_id]->enqueue(std::vector<float>(length_samples, 0.0f));
+  in_buffer_map_[capture_id] = std::make_unique<BatchedBuffer>(
+      std::chrono::seconds(node_ptr_->get_parameter("buffer_capacity").as_int()),
+      std::chrono::milliseconds(node_ptr_->get_parameter("carry_over_capacity").as_int()));
+
+  RCLCPP_INFO(node_ptr_->get_logger(), "Audio Channel %d initialized", capture_id);
+}
+
+bool InferenceNode::handle_inference() {
+  // Lock?
+  // std::lock_guard<std::mutex> lock(mutex_);
+  std::string last_transcript;
+  bool was_run = false;
+
+  for (const auto& pair : in_buffer_map_) {
+    auto& key = pair.first;
+    auto& in_buffer = pair.second;
+
+    if (in_buffer->empty()) {
+      continue;
+    }
+    {
+      // std::lock_guard<std::mutex> lock(mutex_);
+      // TODO:  Check off-by-one error
+      new_samples[key] += in_buffer->size(); 
+      in_buffer->dequeue(audio_data_map_[key]);
+    }
+
+    if (new_samples[key] < step_samples_) {
+      continue;
+    }
+
+    // run inference
+    inference_(audio_data_map_[key]->peak());
+    was_run = true;
+  }
+
+  return was_run; 
 }
 
 void InferenceNode::timer_callback()
 {
   // Always write un-updated data from transcript to file
-
   if (!active_) {
     return;
   }
-
-  // While dequeue-ing, data is automatically removed from the internal buffer
-  batched_buffer_->dequeue(new_audio_data_);
-  if (new_audio_data_.size() <  step_samples_) {
-    return;
-  }
-
-  // Ring buffer, never dequeue so it stays full for inference
-  audio_data_->enqueue(new_audio_data_);
-  // after adding, clear and role over audio to help with word breaks. 
-  batched_buffer_->clear_and_carry_over_(new_audio_data_);
-
-  auto transcription = inference_(audio_data_->peak());
-
   auto message = std_msgs::msg::String();
-  message.data = transcription;
+  
+  handle_inference();
+
+  message.data = transcript.get_last();
   publisher_->publish(message);
 }
 
@@ -200,100 +259,151 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
   inference_start_time_ = node_ptr_->now();
   int batch_idx = 0;
 
+  auto lambda_set_result = [this, &result](const std::string& info) {
+      result->info = info;
+      RCLCPP_INFO(node_ptr_->get_logger(), "Get size:   %ld.", transcript.transcript_frames.size());
+
+      auto str = transcript.get();
+      // std::string str;
+      // for (auto& patch : transcript.transcript_frames) {
+      //     RCLCPP_INFO(node_ptr_->get_logger(), "Ret:   %s.", str.c_str());
+          // std::accumulate(patch.tokens.begin(), patch.tokens.end(), str);
+      // }
+
+      // std::string str = "";
+      // for (auto& patch : transcript.transcript_frames) {
+      //     for (auto& token : patch.tokens) {
+      //         str += token;
+      //     }
+      // }
+      // RCLCPP_INFO(node_ptr_->get_logger(), "Ret2:   %s.", str.c_str());
+
+      // auto str = std::accumulate(transcript.transcript.begin(), 
+      //                            transcript.transcript.end(), std::string());
+      result->transcriptions.push_back(str);
+      RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
+      // RCLCPP_INFO(node_ptr_->get_logger(), str.c_str());
+      // batched_buffer_->clear();  
+  };
+
+  transcript.clear();
   while (rclcpp::ok()) {
     if (node_ptr_->now() - inference_start_time_ > goal_handle->get_goal()->max_duration) {
-      auto str = std::accumulate(transcript.transcript.begin(), 
-                                  transcript.transcript.end(), std::string());
-      result->transcriptions.push_back(str);
-      result->info = "Inference timed out.";
-      RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
+      lambda_set_result("Inference timed out.");
       goal_handle->succeed(result);
-      batched_buffer_->clear();
       return;
+      // auto str = std::accumulate(transcript.transcript.begin(), 
+      //                             transcript.transcript.end(), std::string());
+      // result->transcriptions.push_back(str);
+      // result->info = "Inference timed out.";
+      // RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
+      // goal_handle->succeed(result);
+      // batched_buffer_->clear();
+      // return;
     }
 
     if (goal_handle->is_canceling()) {
-      auto str = std::accumulate(transcript.transcript.begin(), 
-                                  transcript.transcript.end(), std::string());
-      result->transcriptions.push_back(str);
-      result->info = "Inference cancelled.";
-      RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
+      lambda_set_result("Inference cancelled.");
       goal_handle->canceled(result);
-      batched_buffer_->clear();
       return;
+      // auto str = std::accumulate(transcript.transcript.begin(), 
+      //                             transcript.transcript.end(), std::string());
+      // result->transcriptions.push_back(str);
+      // result->info = "Inference cancelled.";
+      // RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
+      // goal_handle->canceled(result);
+      // batched_buffer_->clear();
     }
 
     if (active_) {
-      auto str = std::accumulate(transcript.transcript.begin(), 
-                                  transcript.transcript.end(), std::string());
-      result->transcriptions.push_back(str);
-      result->info = "Action server stopped.  Subscribe to continuously published topic.";
-      RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
+      lambda_set_result("Action server stopped.  Subscribe to continuously published topic.");
       goal_handle->succeed(result);
-      batched_buffer_->clear();
       return;
     }
 
-    // While dequeue-ing, data is automatically removed from the internal buffer
-    batched_buffer_->dequeue(new_audio_data_);
-    if (new_audio_data_.size() < step_samples_) {
+    if (!handle_inference()) {
       rclcpp::sleep_for(1ms);
       continue;
     }
 
-    // Ring buffer, never dequeue so it stays full
-    audio_data_->enqueue(new_audio_data_);
-    // after adding, clear and role over audio to help with word breaks. 
-    batched_buffer_->clear_and_carry_over_(new_audio_data_);
-
-    auto transcription = inference_(audio_data_->peak());
-
-    // feedback to client
-    feedback->transcription = transcription;
-    feedback->batch_idx = batch_idx++;
+    feedback->transcription = transcript.get_last();
     goal_handle->publish_feedback(feedback);
+
+    // While dequeue-ing, data is automatically removed from the internal buffer
+    // batched_buffer_->dequeue(new_audio_data_);
+    // if (new_audio_data_.size() < step_samples_) {
+    //   rclcpp::sleep_for(1ms);
+    //   continue;
+    // }
+
+    // // Ring buffer, never dequeue so it stays full
+    // audio_data_->enqueue(new_audio_data_);
+    // // after adding, clear and role over audio to help with word breaks. 
+    // batched_buffer_->clear_and_carry_over_(new_audio_data_);
+
+    // auto transcription = inference_(audio_data_->peak());
+
+    // // feedback to client
+    // feedback->transcription = transcription;
+    // feedback->batch_idx = batch_idx++;
+    // goal_handle->publish_feedback(feedback);
 
     // update inference result
     // result->transcriptions.push_back(feedback->transcription);
   }
 
+  // Shouldnt reach
   if (rclcpp::ok()) {
-    auto str = std::accumulate(transcript.transcript.begin(), 
-                                  transcript.transcript.end(), std::string());
-    result->transcriptions.push_back(str);
-    result->info = "Inference succeeded.";
-    RCLCPP_INFO(node_ptr_->get_logger(), str.c_str());
+    lambda_set_result("Inference succeeded.");
     goal_handle->succeed(result);
-    batched_buffer_->clear();
   }
+
+  // result->info = result->info.empty() ? "Inference succeeded." : result->info;
+  // auto str = std::accumulate(transcript.transcript.begin(), 
+  //                             transcript.transcript.end(), std::string());
+  // result->transcriptions.push_back(str);
+  
+  // RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
+  // batched_buffer_->clear();
+  // goal_handle->succeed(result);
+
+  // if (rclcpp::ok()) {
+  //   auto str = std::accumulate(transcript.transcript.begin(), 
+  //                                 transcript.transcript.end(), std::string());
+  //   result->transcriptions.push_back(str);
+  //   result->info = "Inference succeeded.";
+  //   RCLCPP_INFO(node_ptr_->get_logger(), str.c_str());
+  //   goal_handle->succeed(result);
+  //   batched_buffer_->clear();
+  // }
 }
 
-void write_to_file(std::string filename, std::vector<std::string> texts, std::vector<float> probs) {
-  std::ofstream test_file;
-  std::ofstream probs_file;
-  test_file.open(filename + "_text_tokens.txt", std::ios_base::app); 
-  probs_file.open(filename + "_probs_tokens.csv", std::ios_base::app); 
+// void write_to_file(std::string filename, std::vector<std::string> texts, std::vector<float> probs) {
+//   std::ofstream test_file;
+//   std::ofstream probs_file;
+//   test_file.open(filename + "_text_tokens.txt", std::ios_base::app); 
+//   probs_file.open(filename + "_probs_tokens.csv", std::ios_base::app); 
 
-  test_file << "{";
-  for (size_t i = 0; i < texts.size(); i++) {
-    // If the text starts with "[_" and ends with "]", 
-    //  then it is a whisper specific token so skip it
-    if (texts[i].substr(0, 2) == "[_" && texts[i].substr(texts[i].size() - 1, 1) == "]") {
-      continue;
-    }
-    test_file << '"' << texts[i] << '"';
-    probs_file << probs[i];
-    if (i < texts.size() - 2) {
-      test_file << ", ";
-      probs_file << ",";
-    }
-  }
-  test_file << "}\n";
-  probs_file << "\n";
+//   test_file << "{";
+//   for (size_t i = 0; i < texts.size(); i++) {
+//     // If the text starts with "[_" and ends with "]", 
+//     //  then it is a whisper specific token so skip it
+//     if (texts[i].substr(0, 2) == "[_" && texts[i].substr(texts[i].size() - 1, 1) == "]") {
+//       continue;
+//     }
+//     test_file << '"' << texts[i] << '"';
+//     probs_file << probs[i];
+//     if (i < texts.size() - 2) {
+//       test_file << ", ";
+//       probs_file << ",";
+//     }
+//   }
+//   test_file << "}\n";
+//   probs_file << "\n";
 
-  test_file.close();
-  probs_file.close();
-}
+//   test_file.close();
+//   probs_file.close();
+// }
 
 // Helper function to calculate the maximum length at compile time
 constexpr size_t find_longest_length(const std::array<std::string_view, 5>& arr) {
@@ -405,14 +515,32 @@ std::string InferenceNode::inference_(const std::vector<float> &audio) {
                 "Inference took longer than audio buffer size. This leads to un-inferenced audio "
                 "data. Consider increasing thread number or compile with accelerator support.");
   }
+
+  std::vector<std::string> texts;
+  std::vector<float> probs;
+  whisper_->p(texts, probs);
+
+  // std::string s2 = ""; //= std::accumulate(texts.begin(), texts.end(), std::string());
+  // for( auto t : texts) {
+  //   s2 += t;
+  // }
+  // RCLCPP_INFO(node_ptr_->get_logger(),"s32:  %s", s2.c_str());
+
+
+  // std::string s;
+  // std::accumulate(transcript.begin(), transcript.end(), s);
+  // RCLCPP_INFO(node_ptr_->get_logger(),"Pushing:  %s", s);
+
+  // RCLCPP_INFO(node_ptr_->get_logger(),"Before After:  %s", transcript.get_last().c_str());
+  transcript.preprocess(texts, probs); // modify text and probs in place
+  transcript.push_frame(texts, probs);
   return transcription;
+
+
   // std::vector<std::pair<rclcpp::Time, std::string>> transcript;
   // transcript.push_back(std::make_pair(inference_start_time, transcription));
 
   // Get probabilites for each token
-  std::vector<std::string> texts;
-  std::vector<float> probs;
-  whisper_->p(texts, probs);
 
   std::ofstream test_file; 
   std::ofstream probs_file;
@@ -423,20 +551,20 @@ std::string InferenceNode::inference_(const std::vector<float> &audio) {
   }
 
   // Update our transcript with the new data
-  TranscriptData update;
+  // TranscriptData update;
   for (size_t i = 0; i < texts.size(); i++) {
     // If the text starts with "[_" and ends with "]", 
     //  then it is a whisper specific token so skip it
-    if (texts[i].substr(0, 2) == "[_" && texts[i].substr(texts[i].size() - 1, 1) == "]") {
-      continue;
-    }
+    // if (texts[i].substr(0, 2) == "[_" && texts[i].substr(texts[i].size() - 1, 1) == "]") {
+    //   continue;
+    // }
 
     std::pair<std::string, float> combined_token = try_combine(texts, probs, i);
     // Favor text in the middle of the update
     if ( i < texts.size()*0.1 || i > texts.size()*0.9 ) {
       combined_token.second *= 0.3;
     }
-    update.append(combined_token.first, combined_token.second);
+    // update.append(combined_token.first, combined_token.second);
 
     if (WRITE_TEXT_PROBS_TO_FILE) {
       test_file << '"' << combined_token.first << '"';
@@ -456,11 +584,12 @@ std::string InferenceNode::inference_(const std::vector<float> &audio) {
     probs_file.close();
   }
 
-  auto new_update_idx = updater.lcs_merge(transcript, update, last_update_idx);
-  last_update_idx = update_idx;
-  update_idx = new_update_idx;
+  // auto new_update_idx = updater.lcs_merge(transcript, update, last_update_idx);
+  // last_update_idx = update_idx;
+  // update_idx = new_update_idx;
 
   return transcription;
 }
+  
 
 } // end of namespace whisper

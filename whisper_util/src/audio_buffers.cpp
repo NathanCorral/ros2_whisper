@@ -26,6 +26,15 @@ void BatchedBuffer::dequeue(std::vector<float> & result) {
   }
 }
 
+void BatchedBuffer::dequeue(std::unique_ptr<RingBuffer<float>> & result) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  // result.reserve(result.size() + audio_buffer_.size());
+  for (std::size_t i = 0; i < audio_buffer_.size(); ++i) {
+    result->enqueue(static_cast<float>(audio_buffer_.dequeue()) /
+                     static_cast<float>(std::numeric_limits<std::int16_t>::max()));
+  }
+}
+
 void BatchedBuffer::clear_and_carry_over_(std::vector<float> & data) {
   size_t carry_over_samples = std::min(data.size(), carry_over_capacity_);
   std::vector<float> carry_over_audio;

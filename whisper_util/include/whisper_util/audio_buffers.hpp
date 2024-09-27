@@ -5,6 +5,7 @@
 #include <limits>
 #include <mutex>
 #include <vector>
+#include <memory>
 
 // #include <ostream>
 #include <iostream>
@@ -39,11 +40,14 @@ public:
   std::vector<value_type> peak();
 
   value_type dequeue();
-  inline bool is_full() const { return size_ == capacity_; }
+  inline bool is_full() const { return size_ == capacity_; };
+  inline bool almost_full() const { return (size_+1) == capacity_; };
   void clear();
 
-  inline const std::size_t &capacity() const { return capacity_; }
-  inline const std::size_t &size() const { return size_; }
+  inline const std::size_t &capacity() const { return capacity_; };
+  inline const std::size_t &size() const { return size_; };
+
+  inline bool empty() const { return size_ == 0; };
 
 protected:
   void increment_head_();
@@ -76,14 +80,17 @@ public:
 
   // Dequeue data from the buffer and store it in the result vector
   void dequeue(std::vector<float> & result);
+  void dequeue(std::unique_ptr<RingBuffer<float>> & result);
 
   // Clear the external data buffer, copy over the last carry_over_capacity ms of data
   void clear_and_carry_over_(std::vector<float> & data);
 
   void clear();
   inline const std::size_t &buffer_size() const { return audio_buffer_.size(); };
-
-  inline bool full() const { return audio_buffer_.is_full(); }
+  inline const std::size_t &buffer_capacity() const { return audio_buffer_.capacity(); };
+  inline bool almost_full() const { return audio_buffer_.almost_full(); };
+  inline bool empty() const { return audio_buffer_.empty(); };
+  inline const std::size_t &size() const { return audio_buffer_.size(); };
 
 protected:
 

@@ -1,7 +1,9 @@
 #include "whisper_util/transcript_updater.hpp"
 
 namespace whisper {
-    
+/*
+
+
 // Print debug message if DEBUG_MODE is enabled
 void TranscriptUpdater::print_debug(const std::string& message, const bool new_line) const {
     if (DEBUG_MODE) {
@@ -224,14 +226,14 @@ void TranscriptUpdater::make_merge(TranscriptData& transcript,
     auto update_idx = lcs_ids_update[0];
     auto transcript_idx = lcs_ids_transcript[0];
     for (int i=0; i<lcs_ids_update.size(); i++, update_idx++, transcript_idx++) {
-        /**
-         * There are possibly:
-         *   1. Different words in the update/transcript
-         *   2. Missing words in the update
-         *   3. Missing words in the transcript
-         *   4. The update/transcript words match exactly
-         *      - Will always take place when the indexes match the lcs substring
-        **/
+        
+         // There are possibly:
+         //   1. Different words in the update/transcript
+         //   2. Missing words in the update
+         //   3. Missing words in the transcript
+         //   4. The update/transcript words match exactly
+         //      - Will always take place when the indexes match the lcs substring
+        
         if (update_idx != lcs_ids_update[i] && transcript_idx != lcs_ids_transcript[i]) {
             // Case 1:  There are differences in the udpate/transcript subsrings
             // Count the number of un-matched words in each substrings
@@ -424,4 +426,6 @@ std::pair<int, int> find_longest_substr(const std::vector<int>& lcs_ids_update,
 
     return {longest_substr_best, longest_substr_start};
 }
+
+*/
 } // end of namespace whisper

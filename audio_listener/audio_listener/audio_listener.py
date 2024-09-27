@@ -5,7 +5,9 @@ import pyaudio
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Int16MultiArray, MultiArrayDimension
+from rclpy.qos import qos_profile_sensor_data
 
+from whisper_idl.msg import AudioData
 
 class AudioListenerNode(Node):
     def __init__(self, node_name: str) -> None:
@@ -36,9 +38,10 @@ class AudioListenerNode(Node):
             frames_per_buffer=self.frames_per_buffer_,
             rate=self.rate_,
         )
+        self.capture_id_ = -1
 
         self.audio_publisher_ = self.create_publisher(
-            Int16MultiArray, "~/audio", 5
+            AudioData, "~/audio", qos_profile_sensor_data
         )
 
         self.audio_publisher_timer_ = self.create_timer(
@@ -57,7 +60,13 @@ class AudioListenerNode(Node):
         audio_msg.layout.dim.append(
             MultiArrayDimension(label="audio", size=self.frames_per_buffer_, stride=1)
         )
-        self.audio_publisher_.publish(audio_msg)
+
+        # Create the AudioData message
+        audio_msg_pub = AudioData()
+        audio_msg_pub.capture_id = self.capture_id_
+        audio_msg_pub.audio_data = audio_msg
+
+        self.audio_publisher_.publish(audio_msg_pub)
 
     def cleanup_(self):
         self.stream_.close()

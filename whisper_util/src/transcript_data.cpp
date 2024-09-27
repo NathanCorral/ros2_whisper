@@ -2,6 +2,8 @@
 
 namespace whisper {
 
+/*
+
 void TranscriptData::append(const TranscriptData& update, const size_t count, const int update_start){
     transcript.insert(transcript.end(), update.transcript.begin() + update_start, 
                                 update.transcript.begin() + update_start + count);
@@ -75,4 +77,10 @@ void TranscriptData::update_replace_word(const int idx, const TranscriptData& up
 std::vector<std::string> TranscriptData::splice(const int start, const int count) const {
     return std::vector<std::string>(transcript.begin() + start, transcript.begin() + start + count);
 }
+
+std::vector<std::string> push_frame(std::vector<std::string>& texts, std::vector<float> probs) {
+    
+}
+
+*/
 } // end of namespace whisper

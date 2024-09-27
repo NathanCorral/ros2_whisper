@@ -12,6 +12,8 @@
 #include <fstream>
 #include <array>
 #include <string_view>  // For compile-time string views
+#include <mutex>
+
 
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -21,13 +23,15 @@
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 
 #include "whisper_idl/action/inference.hpp"
+#include "whisper_idl/msg/audio_data.hpp" // Custom audio msg
+
 #include "whisper_util/audio_buffers.hpp"
 #include "whisper_util/model_manager.hpp"
 #include "whisper_util/whisper.hpp"
-#include "whisper_util/transcript_updater.hpp"
+#include "whisper_util/transcript_data.hpp"
 
 
-#define WRITE_TEXT_PROBS_TO_FILE 0
+#define WRITE_TEXT_PROBS_TO_FILE 1
 
 namespace whisper {
 
@@ -51,8 +55,8 @@ protected:
   on_parameter_set_(const std::vector<rclcpp::Parameter> &parameters);
 
   // audio subscription
-  rclcpp::Subscription<std_msgs::msg::Int16MultiArray>::SharedPtr audio_sub_;
-  void on_audio_(const std_msgs::msg::Int16MultiArray::SharedPtr msg);
+  rclcpp::Subscription<whisper_idl::msg::AudioData>::SharedPtr audio_sub_;
+  void on_audio_(const whisper_idl::msg::AudioData::SharedPtr msg);
 
   // action server
   // std::shared_ptr<GoalHandleInference> active_goal_;
@@ -73,10 +77,21 @@ protected:
   void timer_callback();
 
   // whisper audio data storage
+  // Map of capture_ids to audio buffers.  -1 is default capture device
+  std::mutex mutex_;
   size_t step_samples_;
-  std::unique_ptr<BatchedBuffer> batched_buffer_; // Enqueue into this
-  std::vector<float> new_audio_data_; // Dequeue into this
-  std::unique_ptr<RingBuffer<float>> audio_data_; // Run inference on this full array
+  size_t length_samples;
+  std::unordered_map<int, size_t> new_samples;   
+  std::unordered_map<int, std::unique_ptr<BatchedBuffer>> 
+                                    in_buffer_map_;     // Enqueue into this
+  // Allow over-writing of audio_data_, so contains a sliding window
+  std::unordered_map<int, std::unique_ptr<RingBuffer<float>>> 
+                                    audio_data_map_;        // Dequeue into this
+
+
+  // std::unique_ptr<BatchedBuffer> batched_buffer_;       
+  // std::vector<float> new_audio_data_;                   // Dequeue into this
+  // std::unique_ptr<RingBuffer<float>> audio_data_;       // Run inference on this full array
 
   // whisper
   std::unique_ptr<ModelManager> model_manager_;
@@ -85,12 +100,16 @@ protected:
   void initialize_whisper_();
 
   // Transcription 
-  TranscriptUpdater updater;
+  // TranscriptUpdater updater;
   TranscriptData transcript;
   int last_update_idx;
   int update_idx;
   std::pair<std::string, float> try_combine(const std::vector<std::string>& texts, 
                                         const std::vector<float>& probs, size_t& i);
+
+
+  bool handle_inference();
+  void initialize_data(const int &capture_id);
 };
 
 /* Helper function */
