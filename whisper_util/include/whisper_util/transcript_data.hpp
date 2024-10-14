@@ -10,6 +10,242 @@
 
 namespace whisper {
 
+
+
+class WhisperSegment {
+public:
+  std::string text;
+  int64_t t0;
+  int64_t t1;
+  int64_t audio_offset_ms;
+  int occurances;
+  // Experimental
+  // bool ends_with_speaker_turn;
+  // vector<float> probs;
+  // vector<std::string> tokens;
+
+  WhisperSegment(const std::string & text, int64_t t0, int64_t t1)
+        : text(text), t0(t0), t1(t1), audio_offset_ms(0), occurances(1) {};
+
+  float text_overlap(const WhisperSegment & other) const {
+    return percentageOverlap(text, other.text);
+  } 
+
+  std::string longestCommonSubstring(const std::string& str1, const std::string& str2) const {
+      int len1 = str1.size();
+      int len2 = str2.size();
+      
+      // Create a 2D table to store lengths of longest common suffixes of substrings
+      std::vector<std::vector<int>> dp(len1 + 1, std::vector<int>(len2 + 1, 0));
+      
+      // Length of the longest common substring
+      int maxLength = 0;
+      // Ending index of the longest common substring in str1
+      int endIndex = 0;
+
+      // Build the dp table
+      for (int i = 1; i <= len1; ++i) {
+          for (int j = 1; j <= len2; ++j) {
+              // if (str1[i - 1] == str2[j - 1]) {
+              if (std::tolower(static_cast<unsigned char>(str1[i - 1])) == 
+                    std::tolower(static_cast<unsigned char>(str2[j - 1]))) {  
+                  dp[i][j] = dp[i - 1][j - 1] + 1;
+                  if (dp[i][j] > maxLength) {
+                      maxLength = dp[i][j];
+                      endIndex = i - 1;
+                  }
+              }
+          }
+      }
+      
+      // If no common substring, return empty string
+      if (maxLength == 0) {
+          return "";
+      }
+      
+      // Return the longest common substring
+      return str1.substr(endIndex - maxLength + 1, maxLength);
+  };
+
+  // Function to calculate percentage overlap
+  double percentageOverlap(const std::string& str1, const std::string& str2) const {
+      std::string lcs = longestCommonSubstring(str1, str2);
+      int lcsLength = lcs.size();
+      
+      if (lcsLength == 0) {
+          return 0.0;  // No overlap
+      }
+      
+      // Calculate overlap percentage based on the shorter string
+      double overlapPercentage = (static_cast<double>(lcsLength) / std::min(str1.size(), str2.size()));
+      
+      return overlapPercentage;
+  };
+};
+
+
+
+class TranscriptionData {
+public:
+  std::vector<WhisperSegment> segments;
+  std::vector<bool> segments_finished;
+
+
+  TranscriptionData() {};
+
+  void add_frame(const std::vector<std::string> & texts, 
+          const std::vector<int64_t> & t0s, const std::vector<int64_t> & t1s) {
+
+    std::vector<WhisperSegment> add_segments;
+    for (auto j=0; j<texts.size(); j++) {
+      add_segments.push_back(WhisperSegment(texts[j], t0s[j], t1s[j]));
+    }
+
+
+    // Indices of segments which are going stale
+    std::vector<int> update_segments_finished;
+    int earliest_updated = segments.size()+1;
+    // Mask for the new segments which have been used (and should NOT be pushed to back)
+    std::vector<bool> add_segments_mask(texts.size(), true);
+
+    for (auto i=0; i<segments.size(); i++) {
+      if (segments_finished[i]) {
+        continue;
+      } // If the segment does not get updated now, mark it as finished.
+      bool updated = false;
+
+      printf("old_segment: '%s'\n", segments[i].text.c_str());
+
+      for (auto j=0; j<texts.size(); j++) {
+        // if (!add_segments_mask[j]) {
+        //   continue; // New segment has already been merged/used to update
+        // }
+        auto & new_segment = add_segments[j];
+        float overlap = segments[i].text_overlap(new_segment);
+        printf("   v.s. new: '%s'\n", new_segment.text.c_str());
+        
+        if (overlap > 0.3) {
+          printf("\t--Overlap %.4f \n", overlap);
+          add_segments_mask[j] = false;
+          updated = true;
+          earliest_updated = std::min(earliest_updated, i);
+          if (segments[i].text.size() <= new_segment.text.size()) {
+            printf("\t!!-MERGED\n");
+            segments[i] = new_segment;
+          }
+          break;
+        }
+      }
+
+      if (!updated) {
+        update_segments_finished.push_back(i);
+      }
+    }
+
+    // Add new segments to transcript
+    for (auto j=0; j<texts.size(); j++) {
+      if(add_segments_mask[j]) {
+        printf("Push Back: '%s'\n", texts[j].c_str());
+        segments.push_back(WhisperSegment(texts[j], t0s[j], t1s[j]));
+        segments_finished.push_back(false);
+      }
+    }
+
+    // Mark segments which are going stale
+    printf("///Earliest: %d\n", earliest_updated);
+    for (int & i : update_segments_finished) {
+      if (earliest_updated < i) {
+        continue;
+      }
+      // if (last >= 0 && i != last+1) {
+      //   break;
+      // }
+      printf("No longer Updated [%d]: '%s'\n", i, segments[i].text.c_str());
+      segments_finished[i] = true;
+    }
+
+    // 2 things
+    //   1. Drop new elements from incoming array when added -- done (todo test)
+    //   2. Only let last continuous indices go stale -- done (todo test)
+    //   3. TODO:  Merge starting from first element of lcs (return lcs start indice, lcs len)
+    //   4.  Issue:  Update is way smaller getting merged -- done
+
+    // Next 2:
+    //  1. dont remove from list
+    //  2. Capitals and numbers
+
+    // Next 1!:
+    /*
+    [component_container_mt-1] old_segment: ' True, Dudley was now so scared of Harry'
+    [component_container_mt-1]    v.s. new: ' Harry's last month with the Dursleys wasn't fun.'
+    [component_container_mt-1]    v.s. new: ' True Dudley was now so scared of Harry he wouldn't stay in the same room'
+    [component_container_mt-1]  --Overlap 0.8500 
+    [component_container_mt-1]  !!-MERGED
+    [component_container_mt-1] old_segment: ' he wouldn't stay in the same room.'
+    [component_container_mt-1]    v.s. new: ' Harry's last month with the Dursleys wasn't fun.'
+    [component_container_mt-1]    v.s. new: ' True Dudley was now so scared of Harry he wouldn't stay in the same room'
+    [component_container_mt-1]  --Overlap 0.9714 
+    [component_container_mt-1]  !!-MERGED
+      -- If used in merge, and next one overlaps too, delete the next one overlapping
+
+    NOTE:  
+      - That means we cannot get rid of v.s. new segments when they get merged, in case they are used to detect overlap
+      - i.e.
+[component_container_mt-1] old_segment: ' Chapter 6, The Journey from Platform 9 and 3 Quarters.'
+[component_container_mt-1]    v.s. new: ' and free quarters.'
+[component_container_mt-1]  --Overlap 0.5263 
+[component_container_mt-1] old_segment: ' [BLANK_AUDIO]'
+[component_container_mt-1]    v.s. new: ' and free quarters.'
+[component_container_mt-1]    v.s. new: ' Harry's last month with the Dursleys wasn't fun.'
+[component_container_mt-1]    v.s. new: ' True, Dudley was now so scared of Harry'
+[component_container_mt-1]    v.s. new: ' he wouldn't stay in the same room.'
+[component_container_mt-1] old_segment: ' Harry's last month with the dirt is wasn't fun.'
+[component_container_mt-1]    v.s. new: ' and free quarters.'
+[component_container_mt-1]    v.s. new: ' Harry's last month with the Dursleys wasn't fun.'
+[component_container_mt-1]  --Overlap 0.6250 
+[component_container_mt-1]  !!-MERGED
+          - checks against "and free quarters" MUST STAY
+    */
+  };
+
+
+
+  void add_segment(const WhisperSegment & segment) {
+
+    bool updated = false;
+
+    // Calling back() on an empty vector is undefined
+    if (!segments.empty()) {
+      auto & last_segment = segments.back();
+      float overlap = last_segment.text_overlap(segment);
+
+      printf("last_segment: '%s'\n", last_segment.text.c_str());
+      printf(" new_segment: '%s'\n", last_segment.text.c_str());
+      printf("\t--Overlap %.4f \n", overlap);
+
+      if (overlap > 0.2 && segment.text.size() >= last_segment.text.size()) {
+        updated = true;
+        last_segment = segment;
+        printf("\t--MERGED\n");
+      }
+    }
+
+    // Apply operations
+    if (!updated) {
+      segments.push_back(segment);
+    }
+  };
+
+};
+
+
+
+
+
+
+
+
+
 class Patch {
 public:
     std::vector<std::string> tokens;         // The string split into tokens
@@ -225,6 +461,13 @@ public:
             update_ops.push_back({PatchOperation::PUSH, update, -1});
             return update_ops;
         }
+
+        
+        std::vector<std::string> matched_tokens;
+        std::vector<float> probs;
+
+
+        update_ops.push_back({PatchOperation::PUSH, update, -1});
         auto transcript_idx = match_ids[0].first;
         auto update_idx = match_ids[0].second;
         for (auto [match_transcript_id, match_update_id] : match_ids) {
@@ -299,9 +542,10 @@ public:
     void push_frame(const std::vector<std::string>& texts, const std::vector<float>& probs) {
         // debugging:
         // printf("Starging Merge\n");
-        auto patch = Patch(texts, probs);
-        auto frame_ops = lcs_merge(patch);
-        apply(patch, frame_ops); 
+        // auto patch = Patch(texts, probs);
+        // auto frame_ops = lcs_merge(patch);
+        // apply(patch, frame_ops);
+        transcript_frames.push_back({texts, probs});
 
 
 
@@ -752,5 +996,6 @@ public:
 //     // std::vector<std::string> push_frame(std::vector<std::string>& texts, std::vector<float> probs);
 
 };
+
 } // end of namespace whisper
 #endif // WHISPER_UTIL__TRANSCRIPT_DATA_HPP_

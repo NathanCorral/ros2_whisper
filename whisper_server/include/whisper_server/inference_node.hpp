@@ -23,7 +23,8 @@
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 
 #include "whisper_idl/action/inference.hpp"
-#include "whisper_idl/msg/audio_data.hpp" // Custom audio msg
+#include "whisper_idl/msg/audio_data.hpp" 
+#include "whisper_idl/msg/whisper_chatter.hpp" 
 
 #include "whisper_util/audio_buffers.hpp"
 #include "whisper_util/model_manager.hpp"
@@ -72,7 +73,7 @@ protected:
   // publisher
   bool active_;
   // std::vector<std::pair<rclcpp::Time, std::string>> transcript;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr publisher_;
+  rclcpp::Publisher<whisper_idl::msg::WhisperChatter>::SharedPtr publisher_;
   rclcpp::TimerBase::SharedPtr timer_;
   void timer_callback();
 
@@ -102,6 +103,7 @@ protected:
   // Transcription 
   // TranscriptUpdater updater;
   TranscriptData transcript;
+  TranscriptionData best_transcript;
   int last_update_idx;
   int update_idx;
   std::pair<std::string, float> try_combine(const std::vector<std::string>& texts, 

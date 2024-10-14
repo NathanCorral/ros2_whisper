@@ -43,7 +43,7 @@ InferenceNode::InferenceNode(const rclcpp::Node::SharedPtr node_ptr)
   initialize_whisper_();
 
   // publisher
-  publisher_ = node_ptr_->create_publisher<std_msgs::msg::String>("audio_transcript", 10);
+  publisher_ = node_ptr_->create_publisher<whisper_idl::msg::WhisperChatter>("audio_transcript", 10);
   timer_ = node_ptr_->create_wall_timer(
       50ms, std::bind(&InferenceNode::timer_callback, this));
   active_ = node_ptr_->get_parameter("active").as_bool();
@@ -104,6 +104,10 @@ void InferenceNode::initialize_whisper_() {
   whisper_->cparams.flash_attn = node_ptr_->get_parameter("cparams.flash_attn").as_bool();
   whisper_->cparams.gpu_device = node_ptr_->get_parameter("cparams.gpu_device").as_int();
   whisper_->cparams.use_gpu = node_ptr_->get_parameter("cparams.use_gpu").as_bool();
+
+  whisper_->wparams.token_timestamps = true;
+  whisper_->wparams.split_on_word = true;
+
 
   RCLCPP_INFO(node_ptr_->get_logger(), "Initializing model %s...", model_name.c_str());
   whisper_->initialize(model_manager_->get_model_path(model_name));
@@ -212,7 +216,20 @@ bool InferenceNode::handle_inference() {
     }
 
     // run inference
-    inference_(audio_data_map_[key]->peak());
+    // RCLCPP_INFO(node_ptr_->get_logger(), "Running inference on audio data, new elements:  %d", new_samples[key]);
+    RCLCPP_INFO(node_ptr_->get_logger(), "Time offset:  %.2f", new_samples[key]*100./WHISPER_SAMPLE_RATE);
+
+    new_samples[key] = 0;
+    auto res = inference_(audio_data_map_[key]->peak());
+    if (active_) {
+      // auto message = std_msgs::msg::String();
+      auto pub = whisper_idl::msg::WhisperChatter();
+      // message.data = res;
+      pub.message = res;
+      pub.capture_id = key;
+      publisher_->publish(pub);
+    }
+
     was_run = true;
   }
 
@@ -225,12 +242,12 @@ void InferenceNode::timer_callback()
   if (!active_) {
     return;
   }
-  auto message = std_msgs::msg::String();
+  // auto message = std_msgs::msg::String();
   
   handle_inference();
 
-  message.data = transcript.get_last();
-  publisher_->publish(message);
+  // message.message.data = transcript.get_last();
+  // publisher_->publish(message);
 }
 
 rclcpp_action::GoalResponse
@@ -258,12 +275,19 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
   auto result = std::make_shared<Inference::Result>();
   inference_start_time_ = node_ptr_->now();
   int batch_idx = 0;
+  for (const auto& pair : in_buffer_map_) {
+    pair.second->clear();
+  }
 
   auto lambda_set_result = [this, &result](const std::string& info) {
       result->info = info;
-      RCLCPP_INFO(node_ptr_->get_logger(), "Get size:   %ld.", transcript.transcript_frames.size());
+      // RCLCPP_INFO(node_ptr_->get_logger(), "Get size:   %ld.", transcript.transcript_frames.size());
+      RCLCPP_INFO(node_ptr_->get_logger(), "----TRANSCRIPT---");
+      for (int i=0; i<best_transcript.segments.size(); i++) {
+        RCLCPP_INFO(node_ptr_->get_logger(), "[%d] %s", i, best_transcript.segments[i].text.c_str());
+      }
 
-      auto str = transcript.get();
+      // auto str = transcript.get();
       // std::string str;
       // for (auto& patch : transcript.transcript_frames) {
       //     RCLCPP_INFO(node_ptr_->get_logger(), "Ret:   %s.", str.c_str());
@@ -280,7 +304,7 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
 
       // auto str = std::accumulate(transcript.transcript.begin(), 
       //                            transcript.transcript.end(), std::string());
-      result->transcriptions.push_back(str);
+      // result->transcriptions.push_back(str);
       RCLCPP_INFO(node_ptr_->get_logger(), result->info.c_str());
       // RCLCPP_INFO(node_ptr_->get_logger(), str.c_str());
       // batched_buffer_->clear();  
@@ -515,6 +539,40 @@ std::string InferenceNode::inference_(const std::vector<float> &audio) {
                 "Inference took longer than audio buffer size. This leads to un-inferenced audio "
                 "data. Consider increasing thread number or compile with accelerator support.");
   }
+
+  // std::vector<std::string> texts2;
+  // std::vector<float> probs2;
+  // whisper_->p(texts2, probs2);
+  // transcript.preprocess(texts2, probs2); // modify text and probs in place
+  // transcript.push_frame(texts2, probs2);
+
+  // return transcription;
+
+  // Segment data
+  std::vector<std::string> textz;
+  std::vector<int64_t> t0s;
+  std::vector<int64_t> t1s;
+  whisper_->get_segment_data(textz, t0s, t1s);
+
+  // for (int i=0; i<textz.size(); i++) {
+  //   // RCLCPP_INFO(node_ptr_->get_logger(), "[%d - %d] %s", t0s[i], t1s[i], textz[i].c_str());
+  //   best_transcript.add_segment({textz[i], t0s[i], t1s[i]});
+  // }
+  best_transcript.add_frame(textz, t0s, t1s);
+
+
+
+  // std::stringstream ss;
+  // ss << "TEMP Timestamped transcript" << "\n";
+  // for( int i=0; i<textz.size(); i++) {
+  //   ss << "\t[" << t0s[i] << " - " << t1s[i] << "(" << t1s[i]-t0s[i] << ")] " << textz[i] << "\n";
+  // }
+  // RCLCPP_INFO(node_ptr_->get_logger(), ss.str().c_str());
+
+
+  return transcription;
+
+
 
   std::vector<std::string> texts;
   std::vector<float> probs;
