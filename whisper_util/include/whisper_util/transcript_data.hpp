@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <algorithm> // reverse
+#include <tuple>
 
 namespace whisper {
 
@@ -19,19 +20,38 @@ public:
   int64_t t1;
   int64_t audio_offset_ms;
   int occurances;
-  // Experimental
+  
   // bool ends_with_speaker_turn;
-  // vector<float> probs;
-  // vector<std::string> tokens;
+  std::vector<int> counts;
+  std::vector<float> probs;
+  std::vector<std::string> tokens;
+  
+  // Map a starting index in text to its token index.
+  std::vector<int> text_token_mapping;
+
+  // When running clean, compare values with conflicts and take one with highest count
+  std::vector<std::vector<int>> text_clonflict_mapping; // one-to-many mapping
+  std::vector<std::string> token_confilicts;     // tokens over-written
+  std::vector<int> token_confilict_counts;
 
   WhisperSegment(const std::string & text, int64_t t0, int64_t t1)
         : text(text), t0(t0), t1(t1), audio_offset_ms(0), occurances(1) {};
 
-  float text_overlap(const WhisperSegment & other) const {
+  WhisperSegment(const std::string & text, int64_t t0, int64_t t1, 
+                      std::vector<std::string> tokens, std::vector<float> probs)
+        : text(text), t0(t0), t1(t1), audio_offset_ms(0), occurances(1),
+          tokens(tokens), probs(probs)
+         {
+            counts = std::vector<int>(tokens.size(), 1);  
+            text_token_mapping = mapCharToToken(text, tokens);
+         };
+
+  std::tuple<double, int, int, int>  text_overlap(const WhisperSegment & other) const {
     return percentageOverlap(text, other.text);
   } 
 
-  std::string longestCommonSubstring(const std::string& str1, const std::string& str2) const {
+  std::tuple<std::string, int, int> longestCommonSubstring(const std::string& str1, const std::string& str2) const {
+      // return (lcs, start_str1, start_str2)
       int len1 = str1.size();
       int len2 = str2.size();
       
@@ -41,7 +61,9 @@ public:
       // Length of the longest common substring
       int maxLength = 0;
       // Ending index of the longest common substring in str1
-      int endIndex = 0;
+      int end_str1 = 0;
+      // Ending index of the longest common substring in str2
+      int end_str2 = 0;
 
       // Build the dp table
       for (int i = 1; i <= len1; ++i) {
@@ -52,7 +74,8 @@ public:
                   dp[i][j] = dp[i - 1][j - 1] + 1;
                   if (dp[i][j] > maxLength) {
                       maxLength = dp[i][j];
-                      endIndex = i - 1;
+                      end_str1 = i - 1;
+                      end_str2 = j - 1;
                   }
               }
           }
@@ -60,26 +83,64 @@ public:
       
       // If no common substring, return empty string
       if (maxLength == 0) {
-          return "";
+        return std::make_tuple("", -1, -1);
       }
+
+      // Calculate start index of the LCS in str1
+      int start_str1 = end_str1 - maxLength + 1;
+      int start_str2 = end_str2 - maxLength + 1;
       
       // Return the longest common substring
-      return str1.substr(endIndex - maxLength + 1, maxLength);
+      return std::make_tuple(str1.substr(end_str1 - maxLength + 1, maxLength), start_str1, start_str2);
   };
 
   // Function to calculate percentage overlap
-  double percentageOverlap(const std::string& str1, const std::string& str2) const {
-      std::string lcs = longestCommonSubstring(str1, str2);
+  // Return tuple of:
+  //    perc / 100 overlap, 
+  //    start position on str1 (calling), 
+  //    start position on str2 (new), 
+  //    length of lcs
+  std::tuple<double, int, int, int> percentageOverlap(const std::string& str1, const std::string& str2) const {
+      // return the lcsLength
+      int start_str1;
+      int start_str2;
+      std::string lcs; 
+      
+      std::tie(lcs, start_str1, start_str2) = longestCommonSubstring(str1, str2);
+
       int lcsLength = lcs.size();
       
       if (lcsLength == 0) {
-          return 0.0;  // No overlap
+          return std::make_tuple(0.0, 0, 0, 0);
       }
       
       // Calculate overlap percentage based on the shorter string
       double overlapPercentage = (static_cast<double>(lcsLength) / std::min(str1.size(), str2.size()));
       
-      return overlapPercentage;
+      return std::make_tuple(overlapPercentage, start_str1, start_str2, lcsLength);
+  };
+
+  // Function to map text indices to token indices
+std::vector<int> mapCharToToken(const std::string& text, const std::vector<std::string>& tokens) {
+    std::vector<int> charToTokenMap(text.size(), -1); // Initialize mapping to -1 (default)
+    
+    size_t textPos = 0;  // Current position in text
+    for (size_t tokenIdx = 0; tokenIdx < tokens.size(); ++tokenIdx) {
+      const std::string& token = tokens[tokenIdx];
+      size_t foundPos = text.find(token, textPos);
+      
+      // If the token is found in text
+      if (foundPos != std::string::npos) {
+        // Mark all the characters of the token to map to the tokenIdx
+        for (size_t i = 0; i < token.size(); ++i) {
+            charToTokenMap[foundPos + i] = tokenIdx;
+        }
+        // Move textPos forward to avoid rechecking overlapping tokens
+        textPos = foundPos + token.size();
+      }
+    }
+    
+    return charToTokenMap;
   };
 };
 
@@ -87,26 +148,165 @@ public:
 
 class TranscriptionData {
 public:
+
+
+  void merge(WhisperSegment & cur, WhisperSegment & update, 
+                int cur_start, int update_start, int lcs_len) {
+
+    if (lcs_len == 0) {
+      return;
+    }
+
+    // Skip to end of cur/update lcs.
+    //  TODO:  Update token counts
+    int cur_idx = cur_start + lcs_len;
+    int update_idx = update_start + lcs_len;
+    printf(" last same char / diff char: '%c / %c'\n", cur.text[cur_idx], update.text[update_idx]);
+
+    
+    int prev_token_idx = -1;
+
+    // Increase the token reference and the count for each token in the lcs
+    for (int i=0; i<lcs_len; i++) {
+      auto cur_token_idx = cur.text_token_mapping[cur_start + i];
+      if (prev_token_idx != cur_token_idx) {
+        cur.counts[cur_token_idx]++;
+        prev_token_idx = cur_token_idx;
+      }
+    }
+
+    while (cur_idx < cur.text.size() && update_idx < update.text.size()) {
+      auto cur_token_idx = cur.text_token_mapping[cur_idx];
+      auto update_token_idx = update.text_token_mapping[update_idx];
+      std::string cur_token_val = cur.tokens[cur_token_idx];
+      std::string update_token_val = update.tokens[update_token_idx];
+
+      printf("    CUR     text_idx->token: %d -> %d\n", cur_idx, cur_token_idx);
+      printf("    CUR      cur token text: '%s'\n", cur_token_val.c_str());
+      printf(" UPDATE     text_idx->token: %d -> %d\n", update_idx, update_token_idx);
+      printf(" UPDATE      new token text: '%s'\n", update_token_val.c_str());
+      printf("('%s'->'%s')\n", cur_token_val.c_str(), update_token_val.c_str());
+
+
+      // DEBUG -- assert equal
+      // std::string cur_token_str;
+      // int cur_idx_copy = cur_idx;
+      // while (cur.text_token_mapping[cur_idx_copy] == cur_token_idx) {
+      //   cur_token_str.push_back(cur.text[cur_idx_copy++]);
+      // }
+      // if (cur_token_str != cur_token_val) {
+      //   printf(" ERROR current string token: '%s'\n", cur_token_str.c_str());
+      // }
+      // Debug done 
+
+      if ((cur_idx + cur_token_val.size()) > cur.text.size() ||
+           (update_idx + update_token_val.size()) > update.text.size() ) {
+        printf(" ERROR     check off by one: '%d >= %ld'\n", cur_idx + cur_token_val.size(), 
+                                                                            cur.text.size());
+        printf(" ERROR     check off by one: '%d >= %ld'\n", update_idx + update_token_val.size(),
+                                                                            update.text.size());
+      }
+
+      // TODO:
+      //   - check if equal, increase token counter
+      // else
+      //   - clobber and :
+      //       create or search for token_confilicts
+      if (cur_token_val == update_token_val) {
+
+        // TODO:  For entire token ----
+        // Increase the token reference and the count.
+        // auto cur_token_idx = cur.text_token_mapping[cur_idx];
+        // if (prev_token_idx != cur_token_idx) {
+          // cur.counts[cur_token_idx]++;
+        //   prev_token_idx = cur_token_idx;
+        // }
+        cur.counts[cur_token_idx]++;
+        printf("EQUAL Tokens inc to: %d\n", cur.counts[cur_token_idx]);
+        cur_idx += cur_token_val.size();
+        update_idx += update_token_val.size();
+      } else {
+        // Replace the entire token with the new one
+        // 1. replace text of token.
+        //  1.1 if tokens same size === easy/direct replacement
+        //  1.2 if old token bigger then replace and remove
+        //  1.3 if new token bigger then replace and insert
+        // 2. look up for matching token in conflicts lists
+        //  2.1 if exists
+        //   2.1.1  mark location
+        //   2.1.2  else add to conflicts and mark location
+        //  2.2.  Swap conflicts token with current token / probs / count.
+        // 3.  Increment counters from cur_idx and update_idx
+
+        // 1. -- 
+        // auto cur_token_idx = cur.text_token_mapping[cur_idx];
+        // auto update_token_idx = update.text_token_mapping[update_idx];
+        if (cur_token_val.size() == update_token_val.size()) {
+          // 1.1
+          printf("- -1.1 same size\n");
+          for (auto off = 0; off < cur_token_val.size(); off++) {
+            cur.text[cur_token_idx+off] = update.text[update_token_idx+off];
+          }
+        } else if (cur_token_val.size() > update_token_val.size()) {
+          // 1.2
+          printf("- -1.2 cur token is larger\n");
+          auto off = 0;
+          for (; off < update_token_val.size(); off++) {
+            cur.text[cur_token_idx+off] = update.text[update_token_idx+off];
+          }
+          cur.text.erase(cur_token_idx+off, cur_token_val.size()-off);
+        } else {
+          // 1.3
+          printf("- -1.3 update token is larger\n");
+          auto off = 0;
+          for (; off < cur_token_val.size(); off++) {
+            cur.text[cur_token_idx+off] = update.text[update_token_idx+off];
+          }
+          cur.text.insert(cur_token_idx+off, update_token_val.substr(off));
+        }
+
+        printf("- ----- REPLACED to : '%s'\n", cur.text.c_str());
+        // 2. -- TODO
+
+        // 3.
+        cur_idx += cur_token_val.size();
+        update_idx += update_token_val.size();
+      }
+    }
+
+    // TODO:  Test removing extra from cur
+
+    // Add what is remaining in update on to cur.text
+    if (update_idx < update.text.size()) {
+      cur.text += update.text.substr(update_idx);
+    }
+  }
+
+  void merge(WhisperSegment & cur, WhisperSegment & update) {
+    clobber(cur, update);
+  }
+
+  void clobber(WhisperSegment & cur, WhisperSegment & update) {
+    printf("       update: '%s'\n", update.text.c_str());
+    printf("       before: '%s'\n", cur.text.c_str());
+    cur = update;
+    printf("        after: '%s'\n", cur.text.c_str());
+  }
+
   std::vector<WhisperSegment> segments;
   std::vector<bool> segments_finished;
 
 
   TranscriptionData() {};
 
-  void add_frame(const std::vector<std::string> & texts, 
-          const std::vector<int64_t> & t0s, const std::vector<int64_t> & t1s) {
-
-    std::vector<WhisperSegment> add_segments;
-    for (auto j=0; j<texts.size(); j++) {
-      add_segments.push_back(WhisperSegment(texts[j], t0s[j], t1s[j]));
-    }
-
-
+  // void add_frame(const std::vector<std::string> & texts, 
+  //         const std::vector<int64_t> & t0s, const std::vector<int64_t> & t1s) {
+void add_frame(const std::vector<WhisperSegment> & add_segments) {
     // Indices of segments which are going stale
     std::vector<int> update_segments_finished;
     int earliest_updated = segments.size()+1;
     // Mask for the new segments which have been used (and should NOT be pushed to back)
-    std::vector<bool> add_segments_mask(texts.size(), true);
+    std::vector<bool> add_segments_mask(add_segments.size(), true);
 
     for (auto i=0; i<segments.size(); i++) {
       if (segments_finished[i]) {
@@ -116,23 +316,37 @@ public:
 
       printf("old_segment: '%s'\n", segments[i].text.c_str());
 
-      for (auto j=0; j<texts.size(); j++) {
+      for (auto j=0; j<add_segments.size(); j++) {
         // if (!add_segments_mask[j]) {
         //   continue; // New segment has already been merged/used to update
         // }
-        auto & new_segment = add_segments[j];
-        float overlap = segments[i].text_overlap(new_segment);
+        auto new_segment = add_segments[j];
+
+        float overlap;
+        int start_str1;
+        int start_str2;
+        int len;
+        
+        std::tie(overlap, start_str1, start_str2, len) = segments[i].text_overlap(new_segment);
         printf("   v.s. new: '%s'\n", new_segment.text.c_str());
         
-        if (overlap > 0.3) {
-          printf("\t--Overlap %.4f \n", overlap);
-          add_segments_mask[j] = false;
-          updated = true;
-          earliest_updated = std::min(earliest_updated, i);
+        if (overlap > 0.4) {
+          std::string lcs = segments[i].text.substr(start_str1, len);
+          printf("\tlcs:  (%.4f % ):  '%s'\n", overlap, lcs.c_str());
+
           if (segments[i].text.size() <= new_segment.text.size()) {
             printf("\t!!-MERGED\n");
-            segments[i] = new_segment;
+            merge(segments[i], new_segment, start_str1, start_str2, len);
+            // segments[i] = new_segment;
+            // if (!add_segments_mask[j]) {
+            //   segments[i].text = "";
+            // } else {
+            //   segments[i] = new_segment;
+            // }
           }
+          add_segments_mask[j] = false; // Dont push on end of segments
+          updated = true; // Dont mark as stale, or any later
+          earliest_updated = std::min(earliest_updated, i); 
           break;
         }
       }
@@ -143,10 +357,10 @@ public:
     }
 
     // Add new segments to transcript
-    for (auto j=0; j<texts.size(); j++) {
+    for (auto j=0; j<add_segments.size(); j++) {
       if(add_segments_mask[j]) {
-        printf("Push Back: '%s'\n", texts[j].c_str());
-        segments.push_back(WhisperSegment(texts[j], t0s[j], t1s[j]));
+        printf("Push Back: '%s'\n", add_segments[j].text.c_str());
+        segments.push_back(add_segments[j]);
         segments_finished.push_back(false);
       }
     }
@@ -164,6 +378,20 @@ public:
       segments_finished[i] = true;
     }
 
+    // 2 _More things_
+    //  - Start keeping count of overlaps.  token-word level...
+    //  - lcs printout by passing start and len of calling substr.
+    //  - adjust overlap.
+    //  - fix merge function
+
+    //  - Window input text
+    //  - Merge special tokens (e.g. [BLANK_AUDIO])
+
+
+
+
+
+
     // 2 things
     //   1. Drop new elements from incoming array when added -- done (todo test)
     //   2. Only let last continuous indices go stale -- done (todo test)
@@ -176,6 +404,9 @@ public:
 
     // Next 1!:
     /*
+    This problem is when two segments are present in the transcript that get combined by the next update from the 
+      sliding window.  e.g.
+
     [component_container_mt-1] old_segment: ' True, Dudley was now so scared of Harry'
     [component_container_mt-1]    v.s. new: ' Harry's last month with the Dursleys wasn't fun.'
     [component_container_mt-1]    v.s. new: ' True Dudley was now so scared of Harry he wouldn't stay in the same room'
@@ -205,36 +436,40 @@ public:
 [component_container_mt-1]  --Overlap 0.6250 
 [component_container_mt-1]  !!-MERGED
           - checks against "and free quarters" MUST STAY
+
+
+    OPTIOn B:
+    - 
     */
   };
 
 
 
-  void add_segment(const WhisperSegment & segment) {
+  // void add_segment(const WhisperSegment & segment) {
 
-    bool updated = false;
+  //   bool updated = false;
 
-    // Calling back() on an empty vector is undefined
-    if (!segments.empty()) {
-      auto & last_segment = segments.back();
-      float overlap = last_segment.text_overlap(segment);
+  //   // Calling back() on an empty vector is undefined
+  //   if (!segments.empty()) {
+  //     auto & last_segment = segments.back();
+  //     float overlap = last_segment.text_overlap(segment);
 
-      printf("last_segment: '%s'\n", last_segment.text.c_str());
-      printf(" new_segment: '%s'\n", last_segment.text.c_str());
-      printf("\t--Overlap %.4f \n", overlap);
+  //     printf("last_segment: '%s'\n", last_segment.text.c_str());
+  //     printf(" new_segment: '%s'\n", last_segment.text.c_str());
+  //     printf("\t--Overlap %.4f \n", overlap);
 
-      if (overlap > 0.2 && segment.text.size() >= last_segment.text.size()) {
-        updated = true;
-        last_segment = segment;
-        printf("\t--MERGED\n");
-      }
-    }
+  //     if (overlap > 0.2 && segment.text.size() >= last_segment.text.size()) {
+  //       updated = true;
+  //       last_segment = segment;
+  //       printf("\t--MERGED\n");
+  //     }
+  //   }
 
-    // Apply operations
-    if (!updated) {
-      segments.push_back(segment);
-    }
-  };
+  //   // Apply operations
+  //   if (!updated) {
+  //     segments.push_back(segment);
+  //   }
+  // };
 
 };
 

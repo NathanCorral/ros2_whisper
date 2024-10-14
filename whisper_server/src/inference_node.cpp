@@ -540,25 +540,38 @@ std::string InferenceNode::inference_(const std::vector<float> &audio) {
                 "data. Consider increasing thread number or compile with accelerator support.");
   }
 
-  // std::vector<std::string> texts2;
-  // std::vector<float> probs2;
-  // whisper_->p(texts2, probs2);
   // transcript.preprocess(texts2, probs2); // modify text and probs in place
   // transcript.push_frame(texts2, probs2);
 
   // return transcription;
 
+
+
+
   // Segment data
-  std::vector<std::string> textz;
+  std::vector<std::string> segs;
   std::vector<int64_t> t0s;
   std::vector<int64_t> t1s;
-  whisper_->get_segment_data(textz, t0s, t1s);
+  // whisper_->get_segment_data(textz, t0s, t1s);
+
+  // Token data
+  std::vector<std::vector<std::string>> texts2;
+  std::vector<std::vector<float>> probs2;
+  // whisper_->p(texts2, probs2);
+  whisper_->get_segment_and_token_data(segs, t0s, t1s, texts2, probs2);
 
   // for (int i=0; i<textz.size(); i++) {
   //   // RCLCPP_INFO(node_ptr_->get_logger(), "[%d - %d] %s", t0s[i], t1s[i], textz[i].c_str());
   //   best_transcript.add_segment({textz[i], t0s[i], t1s[i]});
   // }
-  best_transcript.add_frame(textz, t0s, t1s);
+  // auto whisper_segments = 
+
+  std::vector<WhisperSegment> add_segments;
+  for (auto j=0; j<segs.size(); j++) {
+    add_segments.push_back(WhisperSegment(segs[j], t0s[j], t1s[j], texts2[j], probs2[j]));
+  }
+
+  best_transcript.add_frame(add_segments);
 
 
 

@@ -69,4 +69,69 @@ void Whisper::p(std::vector<std::string> & texts, std::vector<float> & probs) { 
     return;
 }
 
+void Whisper::get_segment_data(std::vector<std::string> & texts, 
+                              std::vector<int64_t> & t0s,
+                              std::vector<int64_t> & t1s) { 
+  const int n_segments = whisper_full_n_segments(ctx);
+  for (int i = 0; i < n_segments; ++i) {
+    const char * text = whisper_full_get_segment_text(ctx, i);
+    const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
+    const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
+    texts.push_back(text);
+    t0s.push_back(t0);
+    t1s.push_back(t1);
+  }
+  return;
+}
+
+void Whisper::get_token_data(std::vector<std::string> & texts, 
+                              std::vector<int64_t> & t0s,
+                              std::vector<int64_t> & t1s) { 
+  const int n_segments = whisper_full_n_segments(ctx);
+  for (int i = 0; i < n_segments; ++i) {
+    const int token_count = whisper_full_n_tokens(ctx, i);
+    for (int j = 0; j < token_count; ++j) {
+      const char * token_text = whisper_full_get_token_text(ctx, i, j);
+      auto token_data = whisper_full_get_token_data(ctx, i, j);
+      texts.push_back(token_text);
+      t0s.push_back(token_data.t0);
+      t1s.push_back(token_data.t1);
+    }
+  }
+  return;
+}
+
+
+void Whisper::get_segment_and_token_data(std::vector<std::string> & segs, 
+                              std::vector<int64_t> & t0s,
+                              std::vector<int64_t> & t1s,
+                              std::vector<std::vector<std::string>> & seg_tokens,
+                              std::vector<std::vector<float>> & seg_token_probs) {
+  const int n_segments = whisper_full_n_segments(ctx);
+  for (int i = 0; i < n_segments; ++i) {
+    // Get segment data
+    const char * seg_text = whisper_full_get_segment_text(ctx, i);
+    const int64_t seg_t0 = whisper_full_get_segment_t0(ctx, i);
+    const int64_t seg_t1 = whisper_full_get_segment_t1(ctx, i);
+
+    // Get token data
+    std::vector<float> probs;
+    std::vector<std::string> tokens;
+    const int token_count = whisper_full_n_tokens(ctx, i);
+    for (int j = 0; j < token_count; ++j) {
+      const char * token_text = whisper_full_get_token_text(ctx, i, j);
+      const float p = whisper_full_get_token_p(ctx, i, j);
+      tokens.push_back(token_text);
+      probs.push_back(p);
+    }
+
+    // Push data
+    segs.push_back(seg_text);
+    t0s.push_back(seg_t0);
+    t1s.push_back(seg_t1);
+    seg_tokens.push_back(tokens);
+    seg_token_probs.push_back(probs);
+  }
+}
+
 } // end of namespace whisper
