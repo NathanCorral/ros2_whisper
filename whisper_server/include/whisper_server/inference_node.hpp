@@ -104,6 +104,7 @@ protected:
   // TranscriptUpdater updater;
   TranscriptData transcript;
   TranscriptionData best_transcript;
+  _Data d;
   int last_update_idx;
   int update_idx;
   std::pair<std::string, float> try_combine(const std::vector<std::string>& texts, 

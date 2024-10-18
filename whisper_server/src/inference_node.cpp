@@ -5,6 +5,11 @@ InferenceNode::InferenceNode(const rclcpp::Node::SharedPtr node_ptr)
     : node_ptr_(node_ptr), language_("en"), last_update_idx(0), update_idx(0) {
   declare_parameters_();
 
+  test_Words();
+  test_Words();
+  test_Words();
+  test_Words();
+
   auto cb_group = node_ptr_->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   rclcpp::SubscriptionOptions options;
   options.callback_group = cb_group;
@@ -286,6 +291,7 @@ void InferenceNode::on_inference_accepted_(const std::shared_ptr<GoalHandleInfer
       for (int i=0; i<best_transcript.segments.size(); i++) {
         RCLCPP_INFO(node_ptr_->get_logger(), "[%d] %s", i, best_transcript.segments[i].text.c_str());
       }
+      d.print(2);
 
       // auto str = transcript.get();
       // std::string str;
@@ -543,7 +549,24 @@ std::string InferenceNode::inference_(const std::vector<float> &audio) {
   // transcript.preprocess(texts2, probs2); // modify text and probs in place
   // transcript.push_frame(texts2, probs2);
 
-  // return transcription;
+  std::vector<std::string> texts3;
+  std::vector<float> probs3;
+  whisper_->p(texts3, probs3);
+  // for (int i=0; i<texts3.size(); i++) {
+  //   RCLCPP_INFO(node_ptr_->get_logger(), "'%s'", texts3[i].c_str());
+  // }
+  std::vector<_Word> words = construct_words(texts3, probs3);
+  // if(words.size() > 5) {
+  //   // Window: Remove last and first word
+  //   for( int i=0; i<1; i++) {
+  //     words.erase(words.begin() + words.size());
+  //   }
+  //   for( int i=0; i<1; i++) {
+  //     words.erase(words.begin());
+  //   }
+  // }
+  d.merge(words);
+  return transcription;
 
 
 
