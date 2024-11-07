@@ -210,17 +210,20 @@ void TranscriptManagerNode::merge_one_(const std::vector<Word> &new_words) {
                                               new_words[curB_id].get_segment_data_str().c_str());
           pending_ops.push_back({Transcript::OperationType::MERGE_SEGMENTS, curA_id, curB_id});
         }
+        curA_id++;
+        curB_id++;
+        continue;
       }
       // 0.2  If the transcript has a segment not present in the update, schedule it for deletion
       else if (curA_id != nextA_id && old_words[curA_id].is_segment()) {
         pending_ops.push_back({Transcript::OperationType::DECREMENT, curA_id});
-        pending_ops.push_back({Transcript::OperationType::DECREMENT, curA_id});
+        // pending_ops.push_back({Transcript::OperationType::DECREMENT, curA_id});
         curA_id++;
         continue;
       }
       // 0.3  Add segments from the update to the segment (may get deleted later)
       else if (curB_id != nextB_id && new_words[curB_id].is_segment()) {
-        pending_ops.push_back({Transcript::OperationType::INSERT, curA_id, curB_id});
+        pending_ops.push_back({Transcript::OperationType::ADD_SEGMENT, curA_id, curB_id});
         curB_id++;
         continue;
       }

@@ -6,6 +6,7 @@
 #include <numeric> // accumulate
 #include <stdexcept>
 #include <cstdint>
+#include <cstdio> // fprintf(stderr, ...)
 #include <algorithm> // reverse
 #include <tuple>
 #include <iomanip>
@@ -139,6 +140,7 @@ public:
  *     --- This behavior is not currently implmented and the vector is only best-value-first.
  */
 class Word {
+
 private:
   std::vector<std::vector<SingleToken>> word_tokens_;
   std::vector<int> word_occurances_;
@@ -343,6 +345,7 @@ public:
     // printf("This segment data:  \n%s\n", segment_data_->as_str().c_str());
     // printf("Other segment data:  \n%s\n", other_data->as_str().c_str());
 
+    // WIP
     segment_data_->overwrite(*other_data);
 
     // Increase likelyhood of the segmention
@@ -424,6 +427,18 @@ private:
       }
     }
   }
+
+public:
+  SingleToken get_end_token() const { return segment_data_->get_end_token(); };
+  std::chrono::milliseconds get_duration() const { return segment_data_->get_duration(); };
+  std::chrono::system_clock::time_point get_start() const { return segment_data_->get_start(); };
+
+  void set_end_token(const SingleToken end_token) { segment_data_->set_end_token(end_token); };
+  void set_duration(const std::chrono::milliseconds duration) { segment_data_->set_duration(duration); };
+  void set_start(const std::chrono::system_clock::time_point segment_start) 
+                                                  { segment_data_->set_start(segment_start); };
+
+  std::string as_str() const { return segment_data_->as_str(); };
 };
 
 
@@ -433,7 +448,7 @@ private:
 class Transcript {
 private:
   std::vector<Word> transcript_;
-  std::vector<int> segment_ids;
+  std::vector<int> segment_ids; // Sorted Array of transcript_ indicies
   int stale_id_;
 
 public:
@@ -444,7 +459,9 @@ public:
   // 
   enum OperationType { INCREMENT, DECREMENT, INSERT, 
                       CONFLICT, REMOVE, 
-                      MATCHED_WORD, MERGE_SEGMENTS};
+                      MATCHED_WORD, MERGE_SEGMENTS,
+                      ADD_SEGMENT, REMOVE_SEGMENT
+                    };
   struct Operation {
     const OperationType op_type_;
     const int id_;
@@ -455,7 +472,8 @@ public:
       if (op_type_ == INSERT || 
           op_type_ == CONFLICT ||
           op_type_ == MATCHED_WORD ||
-          op_type_ == MERGE_SEGMENTS) {
+          op_type_ == MERGE_SEGMENTS ||
+          op_type_ == ADD_SEGMENT) {
         throw std::runtime_error("Missing argument on Operation initialization.");
       }
     }
@@ -471,11 +489,15 @@ public:
                     const std::vector<Word> &new_words,
                     const int new_word_id);
   void conflict_merge_word(const int id,
-                      const std::vector<Word> &others,
+                      const std::vector<Word> &no_conflict_other,
                       const int other_id);
   void merge_word_segments(const int id,
                     const std::vector<Word> &new_words,
                     const int new_word_id);
+  bool add_word_segments(const int id,
+                    const std::vector<Word> &new_words,
+                    const int new_word_id);
+  bool delete_word_segments(const int id);
 
 
   // run all operations
@@ -520,18 +542,28 @@ public:
 
   // void update_stale_id(std::chrono::system_clock::time_point cur_time);
 
+  int get_seg_before(const int id);
+  int get_seg_after(const int id);
+
+
   // Provide access to the const iterator
   using const_iterator = typename std::vector<Word>::const_iterator;
   const_iterator begin() const { return transcript_.cbegin(); }
   const_iterator end() const { return transcript_.cend(); }
 
   std::string get_print_str() {
-    std::string print_str;
+    std::string print_str = "\033[34m";
     // for (const auto & word : transcript_) {
     for (size_t i = 0; i < transcript_.size(); ++i) {
       const auto &word = transcript_[i];
-      print_str += "'";
+      if (word.is_segment()) {
+        print_str += "\n";
+        print_str += word.as_str();
+        continue;
+      }
+      // print_str += "'";
       print_str += word.get();
+      continue;
       print_str += "'";
       print_str += "(";
       print_str += std::to_string(i);
@@ -541,6 +573,7 @@ public:
       print_str += std::to_string(word.get_prob());
       print_str += ")";
     }
+    print_str += "\033[0m";
     return print_str;
   }
 };
